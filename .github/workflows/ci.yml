@@ -1,0 +1,44 @@
+name: ci
+
+# CI for the harness. Hugging Face's hosted CI does not run these workflows,
+# so this file is the source of truth when you mirror the repo to GitHub.
+# It mirrors the local quality gates (lint, typecheck, tests, coverage).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false  # we never want to fetch model weights in CI
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # The CI image has no model weights, so the ``inference`` extra
+          # is intentionally omitted — it would only be needed for the
+          # heavyweight ``TransformersGLM`` integration test, which is
+          # gated to opt-in.
+          pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests
+      - name: Tests
+        run: pytest -q
+      - name: Coverage gate
+        run: |
+          pytest -q --cov=glmharness --cov-fail-under=80 --cov-report=term-missing:skip-covered

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+*.prof
+
+# Runtime artifacts
+.sessions/
+*.jsonl.corrupt-*
+.benchmarks/*
+!.benchmarks/.gitkeep
+
+# OS
+.DS_Store
+
+# Model artifacts stay tracked via Git LFS (do not ignore *.safetensors)

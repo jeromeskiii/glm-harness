@@ -89,3 +89,8 @@ ban-relative-imports = "all"
 include = ["src"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
+# ``torch`` and ``transformers`` ship in the optional ``[inference]`` extra;
+# CI installs only ``[dev]`` so pyright sees them as missing. Every call site
+# already carries ``# type: ignore[import-not-found, ...]`` so disabling the
+# import warning for these modules is safe.
+reportMissingImports = "none"

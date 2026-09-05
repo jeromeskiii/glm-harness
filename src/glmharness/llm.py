@@ -27,7 +27,7 @@ from .logging import get_logger
 
 
 class LLM(Protocol):
-    async def stream(
+    def stream(
         self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None
     ) -> AsyncIterator[str]: ...
 
@@ -67,16 +67,20 @@ class TransformersGLM:
         if self.model is not None:
             return
         try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
+            # transformers is an optional ``[inference]`` extra. We type-check
+            # without it; the runtime import is what the user gets when they
+            # install the optional dep. Each downstream use is annotated
+            # with the appropriate type-ignore comment below.
+            from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import-not-found]
         except ImportError as exc:
             raise ConfigError(
                 "local mode requires the 'inference' extra: "
                 "pip install 'glmharness[inference]'"
             ) from exc
-        self.tokenizer = AutoTokenizer.from_pretrained(
+        self.tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType]
             self.model_path, trust_remote_code=True
         )
-        self.model = AutoModelForCausalLM.from_pretrained(
+        self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
             self.model_path, device_map="auto", trust_remote_code=True, torch_dtype="auto"
         )
 
@@ -105,10 +109,10 @@ class TransformersGLM:
         )
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
 
-        from transformers import TextIteratorStreamer
+        from transformers import TextIteratorStreamer  # type: ignore[import-not-found]
 
-        streamer = TextIteratorStreamer(
-            self.tokenizer, skip_prompt=True, skip_special_tokens=True
+        streamer: TextIteratorStreamer = TextIteratorStreamer(  # type: ignore[reportUnknownMemberType]
+            self.tokenizer, skip_prompt=True, skip_special_tokens=True  # type: ignore[reportUnknownMemberType]
         )
         generation_kwargs = {
             **inputs,
@@ -142,8 +146,11 @@ class TransformersGLM:
 
         def _feed() -> None:
             try:
-                for text in streamer:
-                    post(text)
+                # TextIteratorStreamer.__iter__ yields str; the transformers
+                # stub leaves the element type as Any, so both the for-loop
+                # variable and the post() argument need type-ignore.
+                for text in streamer:  # type: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+                    post(text)  # type: ignore[arg-type]
             except Exception as exc:
                 box["error"] = exc
                 post(exc)

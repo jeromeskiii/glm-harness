@@ -70,20 +70,25 @@ class HarnessConfig:
 
     # runtime (not from env)
     prompt: str = ""
-    _unknown_env: dict[str, str] = field(default_factory=dict, repr=False)
+    # Populated by :meth:`from_env`; defaults to empty so direct construction
+    # works without it. The factory returns a fresh dict per instance so the
+    # field annotation stays accurate without a mutable default.
+    unknown_env: dict[str, str] = field(default_factory=dict, repr=False)  # type: ignore[assignment]
 
     @classmethod
     def from_env(cls) -> HarnessConfig:
         """Build a config from ``GLMH_*`` environment variables."""
-        values: dict[str, object] = {}
-        unknown: dict[str, str] = {}
+        # Build the config with explicit default values, then layer env-var
+        # overrides onto each known field individually so the static type
+        # stays accurate (no ``cls(**dict[str, object])`` round-trip).
+        config = cls()
         for name, (attr, kind, allowed) in _ENV_MAP.items():
             raw = os.environ.get(_ENV_PREFIX + name)
             if raw is None or raw == "":
                 continue
             try:
                 if kind == "int":
-                    value: object = int(raw)
+                    value: int | float | Path | str = int(raw)
                 elif kind == "float":
                     value = float(raw)
                 elif kind == "path":
@@ -96,12 +101,10 @@ class HarnessConfig:
                 raise ConfigError(
                     f"{_ENV_PREFIX}{name} must be one of {allowed}: {raw!r}"
                 )
-            values[attr] = value
+            setattr(config, attr, value)
         for name in os.environ:
             if name.startswith(_ENV_PREFIX) and name[len(_ENV_PREFIX) :] not in _ENV_MAP:
-                unknown[name] = os.environ[name]
-        config = cls(**values)
-        config._unknown_env = unknown
+                config.unknown_env[name] = os.environ[name]
         config.validate()
         return config
 
@@ -112,8 +115,8 @@ class HarnessConfig:
             )
         if self.max_new_tokens <= 0:
             raise ConfigError("max_new_tokens must be positive")
-        if self.max_rounds <= 0:
-            raise ConfigError("max_rounds must be positive")
+        if self.max_rounds < 1:
+            raise ConfigError("max_rounds must be >= 1")
         if self.max_retries < 0:
             raise ConfigError("max_retries must be >= 0")
         if self.log_format not in ("text", "json"):
@@ -140,7 +143,7 @@ class HarnessConfig:
 
     def unknown_env_keys(self) -> list[str]:
         """``GLMH_*`` variables that map to nothing (typo guard)."""
-        return sorted(self._unknown_env)
+        return sorted(self.unknown_env)
 
 
 def _hash_fraction(seed: int) -> float:

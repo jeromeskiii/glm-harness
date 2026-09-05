@@ -56,3 +56,42 @@ def test_cli_exit_code_130_on_keyboard_interrupt(monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "run", raise_kbi)
     code = main(["--mock", "x", "y"])
     assert code == 130
+
+
+def test_cli_exit_code_three_for_provider_error(monkeypatch) -> None:
+    """Provider failures inside the run loop map to exit code 3."""
+    from glmharness.errors import ProviderError
+
+    class _BoomLLM:
+        async def stream(self, messages, tools=None):
+            raise ProviderError("provider went away", retryable=False)
+            yield ""  # pragma: no cover
+
+
+    # Patch MockLLM with a boom-providing LLM by overwriting inside cli.run.
+    # We do this by patching the AgentLoop.run to raise from its stream call.
+    from glmharness.loop import AgentLoop
+
+    async def boom_run(self, prompt):
+        # Trigger ProviderError from the streaming path so cli.run sees it
+        # propagate out and the exit-code branch fires.
+        self.sessions.append("turn/start", {})
+        self.sessions.append("user/message", {"content": prompt})
+        raise ProviderError("provider went away", retryable=False)
+
+    monkeypatch.setattr(AgentLoop, "run", boom_run)
+    code = main(["--mock", "x", "y"])
+    assert code == 3
+
+
+def test_cli_exit_code_four_for_other_runtime_error(monkeypatch) -> None:
+    """Unclassified runtime failures inside the run loop map to exit code 4."""
+    from glmharness.loop import AgentLoop
+
+    async def boom_run(self, prompt):
+        self.sessions.append("turn/start", {})
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(AgentLoop, "run", boom_run)
+    code = main(["--mock", "x", "y"])
+    assert code == 4

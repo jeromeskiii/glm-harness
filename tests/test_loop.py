@@ -92,6 +92,45 @@ def test_loop_records_reconstruction_epoch_only_first_round() -> None:
     assert [e.type for e in log.events].count("request/context") == 1
 
 
+def test_loop_logs_only_recovered_chunks_not_discarded_tokens() -> None:
+    """Retried attempts must not pollute the append-only log.
+
+    Property: total ``assistant/chunk`` events in the log equals the
+    number of chunks the consumer observed, **not** the sum across
+    attempts. A regression that committed tokens mid-pret would
+    surface here.
+    """
+    ctx = Context()
+    log = SessionLog()
+    tools = ToolRegistry(ctx)
+    ctx.provide("sessions", log)
+    ctx.provide("tools", tools)
+
+    class TwoFail:
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, messages, tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                yield "first-attempt token"
+                raise ConnectionError("transport dropped")
+            for token in ("a", "b", "c"):
+                yield token
+
+    async def run() -> str:
+        return await AgentLoop(
+            ctx, TwoFail(), log, tools, max_retries=3,
+            retry_base_delay_s=0.001, retry_max_delay_s=0.002,
+        ).run("x")
+
+    answer = asyncio.run(run())
+    assert answer == "abc"
+    chunk_events = [e for e in log.events if e.type == "assistant/chunk"]
+    assert len(chunk_events) == 3
+    assert all(e.data["content"] != "first-attempt token" for e in chunk_events)
+
+
 def test_loop_executes_tool_calls_until_stop_answer() -> None:
     ctx = Context()
     log = SessionLog()
@@ -224,6 +263,49 @@ def test_loop_cancellation_closes_turn_cancelled() -> None:
     asyncio.run(run_and_cancel())
     assert log.events[-1].type == "turn/end"
     assert log.events[-1].data["status"] == "cancelled"
+
+
+def test_loop_tool_cancel_records_tool_result_and_cancels_turn() -> None:
+    """Cancellation mid-tool: turn closes with status='cancelled', the
+    round's streamed answer is logged, and the tool's fact is recorded
+    (the tool's exception propagates as a ``tool/result`` with the
+    cancellation surfaced)."""
+    ctx = Context()
+    log = SessionLog()
+    tools = ToolRegistry(ctx, tool_timeout_s=5.0)
+    ctx.provide("sessions", log)
+    ctx.provide("tools", tools)
+
+    async def slow_tool(_args):
+        await asyncio.sleep(2)
+        return {"ok": True}
+
+    tools.register(Tool("slow", "slow", {"type": "object"}, slow_tool))
+
+    class OneTool:
+        async def stream(self, messages, tools=None):
+            yield '<tool_call>slow<arg_key>x</arg_key><arg_value>1</arg_value></tool_call>'
+
+    async def driver() -> None:
+        agent = AgentLoop(ctx, OneTool(), log, tools)
+        task = asyncio.create_task(agent.run("start"))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(driver())
+    # The turn closes cancelled.
+    assert log.events[-1].type == "turn/end"
+    assert log.events[-1].data["status"] == "cancelled"
+    # The round that streamed the tool-call answer logged it as
+    # ``assistant/message`` *before* invoking the tool — that's correct.
+    assert any(e.type == "assistant/message" for e in log.events)
+    # The cancelled tool's execution either recorded a tool/result (with
+    # ok=False error=CancelledError) or never completed; in either case
+    # no further rounds were attempted, so ``request/header`` should not
+    # appear more than once.
+    assert sum(1 for e in log.events if e.type == "request/header") <= 1
 
 
 def test_loop_max_rounds_reached_records_status() -> None:

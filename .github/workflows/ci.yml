@@ -37,6 +37,8 @@ jobs:
           pip install -e ".[dev]"
       - name: Lint
         run: ruff check src tests
+      - name: Type check
+        run: pyright src
       - name: Tests
         run: pytest -q
       - name: Coverage gate

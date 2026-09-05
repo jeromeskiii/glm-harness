@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import signal
 import sys
 from collections.abc import Sequence
@@ -116,9 +117,12 @@ def _merge_config(args: argparse.Namespace) -> HarnessConfig:
             overrides[target] = value
     if args.prompt is not None:
         overrides["prompt"] = args.prompt
-    config = HarnessConfig(**{**config.__dict__, **overrides})
-    config.validate()
-    return config
+    # ``dataclasses.replace`` keeps the static-type contract: every key is
+    # validated against the field declaration rather than routed through
+    # ``Any`` like ``HarnessConfig(**dict)`` would.
+    merged = dataclasses.replace(config, **overrides)
+    merged.validate()
+    return merged
 
 
 async def run(config: HarnessConfig) -> int:

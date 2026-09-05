@@ -94,9 +94,3 @@ async def test_loader_fail_loud_closes_context() -> None:
     # After the boot failure ctx.close() runs every disposer LIFO. Both
     # Tidies registered their disposer; both effects must fire.
     assert finished == [1, 1]
-
-
-async def __asleep() -> None:
-    import asyncio
-
-    await asyncio.sleep(0)

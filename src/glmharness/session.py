@@ -21,7 +21,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .errors import SessionCorruptError
 from .logging import get_logger
@@ -40,8 +40,8 @@ class SessionLog:
 
     path: Path | None = None
     corrupt_policy: str = "skip"
-    events: list[SessionEvent] = field(default_factory=list, init=False)
-    corrupt_lines: int = field(default=0, init=False)
+    events: list[SessionEvent] = field(default_factory=list, init=False)  # type: ignore[assignment]
+    corrupt_lines: int = field(default=0, init=False)  # type: ignore[assignment]
 
     SURFACE = frozenset({"user/message", "assistant/message", "tool/result"})
 
@@ -67,15 +67,19 @@ class SessionLog:
 
     def _parse_line(self, line: str, line_no: int) -> SessionEvent | None:
         try:
-            row = json.loads(line)
-            event_type = row["type"]
-            data = row["data"]
-            ts = row["ts"]
+            parsed: object = json.loads(line)
+            if not isinstance(parsed, dict):
+                raise ValueError("session row must be a JSON object")
+            row_dict: dict[str, Any] = cast(dict[str, Any], parsed)
+            event_type = row_dict["type"]
+            data = row_dict["data"]
+            ts = row_dict["ts"]
             if not isinstance(event_type, str) or not isinstance(data, dict):
                 raise ValueError("bad record shape")
             if not isinstance(ts, (int, float)):
                 raise ValueError("bad timestamp")
-            return SessionEvent(event_type, data, float(ts))
+            data_dict: dict[str, Any] = cast(dict[str, Any], data)
+            return SessionEvent(event_type, data_dict, float(ts))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.corrupt_lines += 1
             message = f"session line {line_no} is corrupt ({type(exc).__name__})"

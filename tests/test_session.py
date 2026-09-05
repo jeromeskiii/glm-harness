@@ -87,3 +87,30 @@ def test_corrupt_rename_moves_file_aside(tmp_path: Path) -> None:
     assert len(siblings) == 1
     assert siblings[0].name.startswith("s.jsonl.corrupt-")
     assert log.derive_messages() == [{"role": "user", "content": "ok"}]
+
+
+def test_rename_policy_appends_resume_after_corrupt(tmp_path: Path) -> None:
+    """After a corrupt file is moved aside, subsequent ``append`` calls must
+    write to a fresh log file at the original path (the renamed file is
+    preserved for inspection). This is the contract operators depend on to
+    never silently lose live history after a malformed prefix."""
+    path = tmp_path / "live.jsonl"
+    path.write_text(
+        json.dumps({"type": "user/message", "data": {"content": "before"}, "ts": 1.0})
+        + "\n"
+        "not-json\n"
+    )
+    log = SessionLog(path=path, corrupt_policy="rename")
+    # The good prefix is in memory.
+    assert log.derive_messages() == [{"role": "user", "content": "before"}]
+    # Subsequent append must go to the original path (not the renamed one).
+    log.append("assistant/message", {"content": "after"})
+    text = path.read_text(encoding="utf-8")
+    assert '"after"' in text
+    # The renamed file is intact and contains only the corrupt prefix.
+    renamed = next(tmp_path.iterdir())
+    assert renamed.name.startswith("live.jsonl.corrupt-")
+    assert "not-json" in renamed.read_text(encoding="utf-8")
+    # The "before" line is in the renamed file too (we moved the entire
+    # original JSONL to the side, so the good prefix is preserved there).
+    assert "before" in renamed.read_text(encoding="utf-8")

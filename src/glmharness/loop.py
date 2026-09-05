@@ -61,8 +61,12 @@ class AgentLoop:
         self.sessions.append("turn/start", {})
         self.sessions.append("user/message", {"content": prompt})
         logger = get_logger()
+        final_answer = ""
+        # ``max_rounds`` is validated to be >= 1, so these bindings are
+        # always updated by the loop body before use.
+        round_idx = 0
+        answer = ""
         try:
-            final_answer = ""
             for round_idx in range(self.max_rounds):
                 messages = self.sessions.derive_messages()
                 tools_schemas = self.tools.schemas()
@@ -101,6 +105,9 @@ class AgentLoop:
                     {"status": "tools_executed", "rounds": round_idx + 1, "tools": len(tool_calls)},
                 )
             else:
+                # Loop exhausted without a stop-answer: ``answer`` carries the
+                # last streamed response (since ``validate`` forces
+                # ``max_rounds >= 1`` we always ran the body at least once).
                 final_answer = answer
                 self.sessions.append(
                     "step/end", {"status": "max_rounds_reached", "rounds": self.max_rounds}

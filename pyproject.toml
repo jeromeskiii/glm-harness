@@ -52,6 +52,9 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
 asyncio_mode = "auto"
+markers = [
+    "integration: opt-in integration tests that exercise the live LLM bridge (run with GLMH_RUN_INTEGRATION=1)",
+]
 
 [tool.coverage.run]
 source = ["glmharness"]

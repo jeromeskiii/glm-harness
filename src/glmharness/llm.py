@@ -86,12 +86,12 @@ class TransformersGLM:
 
     def _maybe_clear_memory(self) -> None:
         try:
-            import torch
+            import torch  # type: ignore[import-not-found]
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                torch.mps.empty_cache()
+            if torch.cuda.is_available():  # type: ignore[reportUnknownMemberType]
+                torch.cuda.empty_cache()  # type: ignore[reportUnknownMemberType]
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():  # type: ignore[reportUnknownMemberType]
+                torch.mps.empty_cache()  # type: ignore[reportUnknownMemberType]
         except Exception:
             pass
 
@@ -114,8 +114,8 @@ class TransformersGLM:
         streamer: TextIteratorStreamer = TextIteratorStreamer(  # type: ignore[reportUnknownMemberType]
             self.tokenizer, skip_prompt=True, skip_special_tokens=True  # type: ignore[reportUnknownMemberType]
         )
-        generation_kwargs = {
-            **inputs,
+        generation_kwargs: dict[str, Any] = {
+            **inputs,  # type: ignore[arg-type]
             "streamer": streamer,
             "max_new_tokens": self.max_new_tokens,
         }
@@ -131,10 +131,10 @@ class TransformersGLM:
 
         def _generate() -> None:
             try:
-                import torch
+                import torch  # type: ignore[import-not-found]
 
-                with torch.inference_mode():
-                    self.model.generate(**generation_kwargs)
+                with torch.inference_mode():  # type: ignore[reportUnknownMemberType]
+                    self.model.generate(**generation_kwargs)  # type: ignore[union-attr]
             except Exception as exc:
                 box["error"] = exc
                 post(exc)

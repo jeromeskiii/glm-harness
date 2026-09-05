@@ -5,10 +5,11 @@ name: ci
 # It mirrors the local quality gates (lint, typecheck, tests, coverage).
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feat/harness-mvp-harness]
   pull_request:
-    branches: [main]
+    branches: [main, feat/harness-mvp-harness]
 
 jobs:
   test:

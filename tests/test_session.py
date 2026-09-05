@@ -107,9 +107,12 @@ def test_rename_policy_appends_resume_after_corrupt(tmp_path: Path) -> None:
     log.append("assistant/message", {"content": "after"})
     text = path.read_text(encoding="utf-8")
     assert '"after"' in text
-    # The renamed file is intact and contains only the corrupt prefix.
-    renamed = next(tmp_path.iterdir())
-    assert renamed.name.startswith("live.jsonl.corrupt-")
+    # Find the renamed sibling by prefix (order of ``iterdir()`` is
+    # unspecified on most filesystems).
+    siblings = list(tmp_path.iterdir())
+    assert len(siblings) == 2
+    renamed = next(s for s in siblings if s.name.startswith("live.jsonl.corrupt-"))
+    assert renamed != path
     assert "not-json" in renamed.read_text(encoding="utf-8")
     # The "before" line is in the renamed file too (we moved the entire
     # original JSONL to the side, so the good prefix is preserved there).

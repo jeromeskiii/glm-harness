@@ -38,6 +38,8 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "LOG_LEVEL": ("log_level", "str", None),
     "CORRUPT_POLICY": ("corrupt_policy", "str", ("skip", "rename", "fail")),
     "TOOL_ALLOWLIST": ("tool_allowlist", "csv", None),
+    "WORKSPACE": ("workspace_dir", "path", None),
+    "SANDBOX": ("sandbox_mode", "str", ("allow", "deny", "ask")),
 }
 
 
@@ -72,6 +74,10 @@ class HarnessConfig:
 
     # safety: empty means every registered tool is eligible
     tool_allowlist: tuple[str, ...] = ()
+
+    # sandbox & workspace
+    workspace_dir: Path | None = None
+    sandbox_mode: str = "allow"
 
     # runtime (not from env)
     prompt: str = ""
@@ -140,6 +146,10 @@ class HarnessConfig:
             raise ConfigError("retry_base_delay_s must be > 0 and <= retry_max_delay_s")
         if self.model_path is not None and not self.model_path.is_dir():
             raise ConfigError(f"model path is not a directory: {self.model_path}")
+        if self.sandbox_mode not in ("allow", "deny", "ask"):
+            raise ConfigError(f"sandbox_mode must be allow|deny|ask: {self.sandbox_mode!r}")
+        if self.workspace_dir is not None and not self.workspace_dir.is_dir():
+            raise ConfigError(f"workspace path is not a directory: {self.workspace_dir}")
 
     def retry_delay(self, attempt: int) -> float:
         """Exponential backoff with jitter for the given 1-based attempt."""

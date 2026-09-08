@@ -29,6 +29,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
+from .builtin_tools import BuiltinToolsPlugin
 from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
 from .context import Context, PluginLoader
 from .errors import ConfigError, HarnessError, ProviderError
@@ -36,6 +37,7 @@ from .llm import MockLLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
+from .sandbox import SandboxPlugin
 from .session import SessionLog
 from .tools import ToolRegistry
 
@@ -93,6 +95,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="comma-separated tool names the model may call (default: all registered)",
     )
     parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="workspace root directory for filesystem and bash tools (default: cwd)",
+    )
+    parser.add_argument(
+        "--sandbox",
+        choices=("allow", "deny", "ask"),
+        default=None,
+        help="sandbox policy for mutating tools (allow, deny, ask; default: allow)",
+    )
+    parser.add_argument(
         "--doctor",
         action="store_true",
         help="validate config, snapshot, and optional inference extra; do not run a turn",
@@ -114,6 +128,8 @@ _CLI_FIELD_FOR = {
     "corrupt_policy": "corrupt_policy",
     "log_format": "log_format",
     "log_level": "log_level",
+    "workspace": "workspace_dir",
+    "sandbox": "sandbox_mode",
 }
 
 
@@ -188,7 +204,12 @@ async def run(config: HarnessConfig) -> int:
     try:
         loader = PluginLoader(ctx)
         await loader.mount(
-            [BasePlugin(sessions, tools), SafetyPlugin(config.tool_allowlist)]
+            [
+                BasePlugin(sessions, tools),
+                BuiltinToolsPlugin(config.workspace_dir),
+                SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
+                SafetyPlugin(config.tool_allowlist),
+            ]
         )
         agent = AgentLoop(
             ctx,
@@ -267,6 +288,9 @@ def doctor(config: HarnessConfig) -> int:
             )
     if config.tool_allowlist:
         rows.append(("tool_allowlist", ",".join(config.tool_allowlist), True))
+    ws = (config.workspace_dir or Path.cwd()).resolve()
+    rows.append(("workspace", str(ws), ws.is_dir()))
+    rows.append(("sandbox", config.sandbox_mode, True))
     failed = False
     for name, detail, ok in rows:
         mark = "ok" if ok else "FAIL"

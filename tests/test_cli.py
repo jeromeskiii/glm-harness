@@ -128,6 +128,20 @@ def test_parser_accepts_doctor_and_allowlist() -> None:
     assert args.tool_allowlist == "echo,search"
 
 
+def test_parser_accepts_workspace_and_sandbox(tmp_path) -> None:
+    args = build_parser().parse_args(["--workspace", str(tmp_path), "--sandbox", "deny"])
+    assert args.workspace == tmp_path
+    assert args.sandbox == "deny"
+
+
+def test_cli_doctor_outputs_workspace_and_sandbox(tmp_path, capsys) -> None:
+    code = main(["--doctor", "--mock", "hi", "--workspace", str(tmp_path), "--sandbox", "deny"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "workspace:" in captured.out
+    assert "sandbox: deny" in captured.out
+
+
 def test_cli_exit_code_four_for_other_runtime_error(monkeypatch) -> None:
     """Unclassified runtime failures inside the run loop map to exit code 4."""
     from glmharness.loop import AgentLoop

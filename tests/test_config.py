@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from glmharness import HarnessConfig
@@ -114,3 +116,25 @@ def test_resolve_model_path_keeps_mock(tmp_path) -> None:
     assert config.model_path is None
     with pytest.raises(ConfigError, match="cwd is not a GLM snapshot"):
         resolve_model_path(HarnessConfig(), cwd=tmp_path)
+
+
+def test_config_sandbox_mode_validation(tmp_path: Path) -> None:
+    HarnessConfig(sandbox_mode="allow").validate()
+    HarnessConfig(sandbox_mode="deny").validate()
+    HarnessConfig(sandbox_mode="ask").validate()
+    with pytest.raises(ConfigError, match="sandbox_mode must be allow"):
+        HarnessConfig(sandbox_mode="invalid").validate()
+
+
+def test_config_workspace_dir_validation(tmp_path: Path) -> None:
+    HarnessConfig(workspace_dir=tmp_path).validate()
+    with pytest.raises(ConfigError, match="workspace path is not a directory"):
+        HarnessConfig(workspace_dir=tmp_path / "non_existent_folder").validate()
+
+
+def test_from_env_workspace_and_sandbox(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("GLMH_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("GLMH_SANDBOX", "deny")
+    config = HarnessConfig.from_env()
+    assert config.workspace_dir == tmp_path
+    assert config.sandbox_mode == "deny"

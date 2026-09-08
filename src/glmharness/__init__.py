@@ -10,6 +10,7 @@ the kernel.
 
 from __future__ import annotations
 
+from .builtin_tools import BuiltinToolsPlugin, resolve_safe_path
 from .bus import EventBus
 from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
 from .context import Context, Plugin, PluginLoader
@@ -25,6 +26,7 @@ from .errors import (
 from .llm import LLM, MockLLM, TransformersGLM
 from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
+from .sandbox import SandboxMode, SandboxPlugin
 from .session import SessionEvent, SessionLog
 from .tools import Tool, ToolRegistry, parse_tool_calls, validate_tool_arguments
 
@@ -34,6 +36,7 @@ __all__ = [
     "LLM",
     "AgentLoop",
     "BasePlugin",
+    "BuiltinToolsPlugin",
     "ConfigError",
     "Context",
     "EventBus",
@@ -46,6 +49,8 @@ __all__ = [
     "ProviderTimeout",
     "ProviderUnavailable",
     "SafetyPlugin",
+    "SandboxMode",
+    "SandboxPlugin",
     "SessionCorruptError",
     "SessionEvent",
     "SessionLog",
@@ -57,5 +62,6 @@ __all__ = [
     "looks_like_snapshot",
     "parse_tool_calls",
     "resolve_model_path",
+    "resolve_safe_path",
     "validate_tool_arguments",
 ]

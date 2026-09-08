@@ -58,6 +58,8 @@ set of recognized envs with their defaults:
 | `GLMH_LOG_FORMAT` | `text` | `text` for humans, `json` for shippers |
 | `GLMH_LOG_LEVEL` | `INFO` | standard logging levels |
 | `GLMH_CORRUPT_POLICY` | `skip` | `skip` / `rename` / `fail` on bad session JSONL |
+| `GLMH_WORKSPACE` | cwd | workspace root directory for tools (`--workspace`) |
+| `GLMH_SANDBOX` | `allow` | sandbox policy (`allow`, `deny`, `ask`) |
 
 Unknown `GLMH_*` variables are logged and ignored — typos won't crash the
 harness.

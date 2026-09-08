@@ -18,7 +18,9 @@ the harness falls back to `MockLLM` for offline smoke runs.
 
 ## Run
 
-```bash
+# Connect to external vLLM / SGLang / Ollama / OpenAI-compatible endpoint
+glm-harness --api-base http://127.0.0.1:8000/v1 'Explain this repository'
+
 # Deterministic mock (no model weights, no GPU required)
 glm-harness --mock 'hello from the mock adapter' 'say hello'
 
@@ -43,6 +45,9 @@ set of recognized envs with their defaults:
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
+| `GLMH_API_BASE` | — | base URL for OpenAI-compatible endpoint (`--api-base`) |
+| `GLMH_API_KEY` | — | optional bearer token (`--api-key`) |
+| `GLMH_MODEL` | `GLM-5.3-Flash` | model identifier for remote endpoint (`--model`) |
 | `GLMH_MODEL_PATH` | cwd if it is a snapshot | path to a GLM-5.3-Flash snapshot |
 | `GLMH_MOCK` | — | if set, use this string as a deterministic response instead of the model |
 | `GLMH_TOOL_ALLOWLIST` | empty (all registered) | comma-separated tool names the model may call |

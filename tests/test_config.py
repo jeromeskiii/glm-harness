@@ -138,3 +138,21 @@ def test_from_env_workspace_and_sandbox(monkeypatch, tmp_path: Path) -> None:
     config = HarnessConfig.from_env()
     assert config.workspace_dir == tmp_path
     assert config.sandbox_mode == "deny"
+
+
+def test_from_env_api_base_and_key(monkeypatch) -> None:
+    monkeypatch.setenv("GLMH_API_BASE", "http://localhost:8000/v1")
+    monkeypatch.setenv("GLMH_API_KEY", "secret-token")
+    monkeypatch.setenv("GLMH_MODEL", "my-glm-flash")
+    config = HarnessConfig.from_env()
+    assert config.api_base == "http://localhost:8000/v1"
+    assert config.api_key == "secret-token"
+    assert config.model_name == "my-glm-flash"
+
+
+def test_resolve_model_path_keeps_api_base(tmp_path: Path) -> None:
+    from glmharness.config import resolve_model_path
+
+    config = HarnessConfig(api_base="http://localhost:8000/v1")
+    resolve_model_path(config, cwd=tmp_path)
+    assert config.model_path is None

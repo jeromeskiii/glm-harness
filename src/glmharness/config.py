@@ -40,6 +40,9 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "TOOL_ALLOWLIST": ("tool_allowlist", "csv", None),
     "WORKSPACE": ("workspace_dir", "path", None),
     "SANDBOX": ("sandbox_mode", "str", ("allow", "deny", "ask")),
+    "API_BASE": ("api_base", "str", None),
+    "API_KEY": ("api_key", "str", None),
+    "MODEL": ("model_name", "str", None),
 }
 
 
@@ -52,6 +55,11 @@ class HarnessConfig:
     mock: str | None = None
     reasoning_effort: str = "max"
     max_new_tokens: int = 8192
+
+    # remote OpenAI-compatible endpoint
+    api_base: str | None = None
+    api_key: str | None = None
+    model_name: str = "GLM-5.3-Flash"
 
     # session
     session_path: Path | None = None
@@ -171,18 +179,18 @@ def looks_like_snapshot(path: Path) -> bool:
 def resolve_model_path(config: HarnessConfig, *, cwd: Path | None = None) -> HarnessConfig:
     """Fill ``model_path`` from cwd when it is a snapshot and nothing else is set.
 
-    Mock runs never need a snapshot. An explicit ``model_path`` wins. Otherwise
+    Mock runs and remote API runs never need a snapshot. An explicit ``model_path`` wins. Otherwise
     a checkout of this repository (cwd containing ``config.json`` +
     ``tokenizer_config.json``) is the documented default.
     """
-    if config.mock is not None or config.model_path is not None:
+    if config.mock is not None or config.api_base is not None or config.model_path is not None:
         return config
     here = cwd if cwd is not None else Path.cwd()
     if looks_like_snapshot(here):
         config.model_path = here
         return config
     raise ConfigError(
-        "either --mock or a model path (--model-path / GLMH_MODEL_PATH) is "
+        "either --mock, --api-base (GLMH_API_BASE), or a model path (--model-path / GLMH_MODEL_PATH) is "
         "required (cwd is not a GLM snapshot)"
     )
 

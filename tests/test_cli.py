@@ -142,6 +142,22 @@ def test_cli_doctor_outputs_workspace_and_sandbox(tmp_path, capsys) -> None:
     assert "sandbox: deny" in captured.out
 
 
+def test_parser_accepts_api_base_and_key() -> None:
+    args = build_parser().parse_args(
+        ["--api-base", "http://localhost:8000/v1", "--api-key", "secret", "--model", "custom-glm"]
+    )
+    assert args.api_base == "http://localhost:8000/v1"
+    assert args.api_key == "secret"
+    assert args.model == "custom-glm"
+
+
+def test_cli_doctor_outputs_openai_compatible(capsys) -> None:
+    code = main(["--doctor", "--api-base", "http://localhost:8000/v1", "--model", "my-glm"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "provider: openai-compatible (http://localhost:8000/v1, model=my-glm)" in captured.out
+
+
 def test_cli_exit_code_four_for_other_runtime_error(monkeypatch) -> None:
     """Unclassified runtime failures inside the run loop map to exit code 4."""
     from glmharness.loop import AgentLoop

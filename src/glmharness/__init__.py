@@ -23,7 +23,7 @@ from .errors import (
     SessionCorruptError,
     ToolError,
 )
-from .llm import LLM, MockLLM, TransformersGLM
+from .llm import LLM, MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
 from .sandbox import SandboxMode, SandboxPlugin
@@ -43,6 +43,7 @@ __all__ = [
     "HarnessConfig",
     "HarnessError",
     "MockLLM",
+    "OpenAICompatibleGLM",
     "Plugin",
     "PluginLoader",
     "ProviderError",

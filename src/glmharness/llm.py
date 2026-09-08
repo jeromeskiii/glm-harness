@@ -17,10 +17,13 @@ The thread bridge is deliberately simple and race-free:
 from __future__ import annotations
 
 import asyncio
+import json
+import urllib.error
+import urllib.request
 from collections.abc import AsyncIterator
 from pathlib import Path
 from threading import Thread
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from .errors import ConfigError, ProviderError
 from .logging import get_logger
@@ -42,6 +45,180 @@ class MockLLM:
         self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
     ) -> AsyncIterator[str]:
         yield self.response
+
+
+def _format_openai_tool_calls(calls: list[dict[str, Any]]) -> str:
+    """Translate accumulated OpenAI tool-call objects into GLM <tool_call> XML blocks."""
+    blocks: list[str] = []
+    for call in calls:
+        func_raw = call.get("function")
+        func = cast(dict[str, Any], func_raw) if isinstance(func_raw, dict) else {}
+        name = str(func.get("name", ""))
+        raw_args = func.get("arguments", "{}")
+        try:
+            parsed_args: object = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except Exception:
+            parsed_args = {}
+        parts = [f"<tool_call>{name}"]
+        if isinstance(parsed_args, dict):
+            args_dict = cast(dict[str, Any], parsed_args)
+            for k, v in args_dict.items():
+                val_str = json.dumps(v, ensure_ascii=False)
+                parts.append(f"<arg_key>{k}</arg_key><arg_value>{val_str}</arg_value>")
+        parts.append("</tool_call>")
+        blocks.append("".join(parts))
+    return "\n".join(blocks)
+
+
+class OpenAICompatibleGLM:
+    """Remote OpenAI-compatible streaming LLM adapter (vLLM, SGLang, Ollama, API).
+
+    Zero external dependencies; uses urllib.request in a background feeder thread.
+    """
+
+    def __init__(
+        self,
+        api_base: str = "http://127.0.0.1:8000/v1",
+        api_key: str | None = None,
+        model: str = "GLM-5.3-Flash",
+        max_new_tokens: int = 8192,
+        temperature: float = 0.7,
+        timeout_s: float = 300.0,
+        opener: Any = None,
+    ):
+        self.api_base = api_base.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.timeout_s = timeout_s
+        self._opener = opener or urllib.request.urlopen
+
+    async def stream(
+        self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[str]:
+        url = f"{self.api_base}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": self.max_new_tokens,
+            "temperature": self.temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[str | BaseException | None] = asyncio.Queue()
+        box: dict[str, BaseException | None] = {"error": None}
+
+        def post(item: str | BaseException | None) -> None:
+            asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+
+        def _fetch() -> None:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            accumulated_tools: dict[int, dict[str, Any]] = {}
+            try:
+                with self._opener(req, timeout=self.timeout_s) as resp:
+                    for raw_line in resp:
+                        raw_str = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else str(raw_line)
+                        line = raw_str.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk_raw: object = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(chunk_raw, dict):
+                            continue
+                        chunk_dict = cast(dict[str, Any], chunk_raw)
+                        choices_raw = chunk_dict.get("choices")
+                        if not isinstance(choices_raw, list):
+                            continue
+                        for choice_item in cast(list[object], choices_raw):
+                            if not isinstance(choice_item, dict):
+                                continue
+                            choice = cast(dict[str, Any], choice_item)
+                            delta_raw = choice.get("delta")
+                            if not isinstance(delta_raw, dict):
+                                continue
+                            delta = cast(dict[str, Any], delta_raw)
+                            content = delta.get("content")
+                            if isinstance(content, str) and content:
+                                post(content)
+                            tool_calls_raw = delta.get("tool_calls")
+                            if isinstance(tool_calls_raw, list):
+                                for tc_item in cast(list[object], tool_calls_raw):
+                                    if not isinstance(tc_item, dict):
+                                        continue
+                                    tc = cast(dict[str, Any], tc_item)
+                                    idx = int(tc.get("index", 0))
+                                    if idx not in accumulated_tools:
+                                        accumulated_tools[idx] = {
+                                            "id": str(tc.get("id", "")),
+                                            "function": {"name": "", "arguments": ""},
+                                        }
+                                    fn_raw = tc.get("function")
+                                    if isinstance(fn_raw, dict):
+                                        fn = cast(dict[str, Any], fn_raw)
+                                        fn_name = fn.get("name")
+                                        fn_args = fn.get("arguments")
+                                        target_fn = cast(
+                                            dict[str, str],
+                                            accumulated_tools[idx]["function"],
+                                        )
+                                        if isinstance(fn_name, str):
+                                            target_fn["name"] += fn_name
+                                        if isinstance(fn_args, str):
+                                            target_fn["arguments"] += fn_args
+                if accumulated_tools:
+                    tool_list = [accumulated_tools[k] for k in sorted(accumulated_tools.keys())]
+                    formatted = _format_openai_tool_calls(tool_list)
+                    if formatted:
+                        post(formatted)
+            except urllib.error.HTTPError as exc:
+                retryable = exc.code in (429, 500, 502, 503, 504)
+                err = ProviderError(f"API HTTP {exc.code}: {exc.reason}", retryable=retryable)
+                box["error"] = err
+                post(err)
+            except urllib.error.URLError as exc:
+                err = ProviderError(f"API connection error: {exc.reason}", retryable=True)
+                box["error"] = err
+                post(err)
+            except Exception as exc:
+                err = ProviderError(f"API request failed: {exc}", retryable=True)
+                box["error"] = err
+                post(err)
+            finally:
+                post(None)
+
+        feeder = Thread(target=_fetch, daemon=True, name="openai-glm-stream")
+        feeder.start()
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+            if box["error"] is not None:
+                raise box["error"]
+        finally:
+            feeder.join(timeout=5)
 
 
 class TransformersGLM:

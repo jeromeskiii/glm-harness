@@ -33,7 +33,7 @@ from .builtin_tools import BuiltinToolsPlugin
 from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
 from .context import Context, PluginLoader
 from .errors import ConfigError, HarnessError, ProviderError
-from .llm import MockLLM, TransformersGLM
+from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
@@ -107,6 +107,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="sandbox policy for mutating tools (allow, deny, ask; default: allow)",
     )
     parser.add_argument(
+        "--api-base",
+        default=None,
+        help="base URL for OpenAI-compatible endpoint (e.g. http://127.0.0.1:8000/v1)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="API key / bearer token for remote endpoint",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="model identifier for remote endpoint (default: GLM-5.3-Flash)",
+    )
+    parser.add_argument(
         "--doctor",
         action="store_true",
         help="validate config, snapshot, and optional inference extra; do not run a turn",
@@ -130,6 +145,9 @@ _CLI_FIELD_FOR = {
     "log_level": "log_level",
     "workspace": "workspace_dir",
     "sandbox": "sandbox_mode",
+    "api_base": "api_base",
+    "api_key": "api_key",
+    "model": "model_name",
 }
 
 
@@ -179,6 +197,14 @@ async def run(config: HarnessConfig) -> int:
     tools = ToolRegistry(ctx, tool_timeout_s=config.tool_timeout_s)
     if config.mock is not None:
         llm: object = MockLLM(config.mock)
+    elif config.api_base is not None:
+        llm = OpenAICompatibleGLM(
+            api_base=config.api_base,
+            api_key=config.api_key,
+            model=config.model_name,
+            max_new_tokens=config.max_new_tokens,
+            timeout_s=config.request_timeout_s,
+        )
     else:
         assert config.model_path is not None
         llm = TransformersGLM(
@@ -266,6 +292,14 @@ def doctor(config: HarnessConfig) -> int:
         rows.append(("config", str(exc), False))
     if config.mock is not None:
         rows.append(("provider", f"mock ({config.mock!r})", True))
+    elif config.api_base is not None:
+        rows.append(
+            (
+                "provider",
+                f"openai-compatible ({config.api_base}, model={config.model_name})",
+                True,
+            )
+        )
     else:
         try:
             resolve_model_path(config)

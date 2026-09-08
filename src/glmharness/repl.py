@@ -1,12 +1,13 @@
-"""Interactive Terminal REPL for GLM-5.3-Flash agent sessions."""
-
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 from .builtin_tools import BuiltinToolsPlugin
+from .compaction import CompactionPlugin
 from .config import HarnessConfig, resolve_model_path
 from .context import Context, PluginLoader
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
@@ -41,6 +42,15 @@ async def run_repl(
 
     ctx = Context()
     sessions = SessionLog(path=config.session_path, corrupt_policy=config.corrupt_policy)
+    if config.replay_log is not None:
+        sessions.import_log(config.replay_log)
+    if config.projection is not None:
+        try:
+            proj_data: object = json.loads(config.projection)
+            if isinstance(proj_data, list):
+                sessions.import_projection(cast(list[dict[str, Any]], proj_data))
+        except json.JSONDecodeError:
+            pass
     tools = ToolRegistry(ctx, tool_timeout_s=config.tool_timeout_s)
 
     if config.mock is not None:
@@ -73,6 +83,11 @@ async def run_repl(
             BuiltinToolsPlugin(config.workspace_dir),
             SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
             SafetyPlugin(config.tool_allowlist),
+            CompactionPlugin(
+                threshold=config.compaction_threshold,
+                keep_rounds=config.compaction_keep_rounds,
+                strategy=config.compaction_strategy,
+            ),
         ]
     )
 

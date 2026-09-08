@@ -103,17 +103,94 @@ class SessionLog:
                 os.fsync(stream.fileno())
         return event
 
+    def import_projection(self, projection: list[dict[str, Any]]) -> int:
+        """Import pre-turn or pre-switch message projection into the session log."""
+        imported = 0
+        for item in projection:
+            role = str(item.get("role") or "").lower()
+            content = str(item.get("content") or item.get("text") or "")
+            if not role:
+                continue
+
+            event_type = f"{role}/message"
+            if role == "tool":
+                event_type = "tool/result"
+            self.append(event_type, {"content": content})
+            imported += 1
+        return imported
+
+    def import_log(self, source: Path | str | list[dict[str, Any]]) -> int:
+        """Import events from an external session file or event array."""
+        records: list[dict[str, Any]] = []
+        if isinstance(source, (str, Path)):
+            src_path = Path(source)
+            if not src_path.exists():
+                return 0
+            lines = src_path.read_text(encoding="utf-8").splitlines()
+            for line in lines:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                try:
+                    parsed: object = json.loads(line_str)
+                    if isinstance(parsed, dict):
+                        records.append(cast(dict[str, Any], parsed))
+                except json.JSONDecodeError:
+                    continue
+        else:
+            records = list(source)
+
+        imported = 0
+        for rec in records:
+            # Format 1: glmharness record {"type": ..., "data": ...}
+            if "type" in rec and isinstance(rec.get("data"), dict):
+                evt_type = str(rec["type"])
+                evt_data = cast(dict[str, Any], rec["data"])
+                self.append(evt_type, evt_data)
+                imported += 1
+            # Format 2: DMH host record {"kind": ..., "payload": ...}
+            elif "kind" in rec and isinstance(rec.get("payload"), dict):
+                kind = str(rec["kind"])
+                payload = cast(dict[str, Any], rec["payload"])
+                content = str(payload.get("content") or payload.get("text") or "")
+                if kind in ("user/message", "assistant/message", "tool/result"):
+                    self.append(kind, {"content": content})
+                    imported += 1
+            # Format 3: Projection item {"role": ..., "content": ...}
+            elif "role" in rec:
+                imported += self.import_projection([rec])
+        return imported
+
     def derive_messages(self) -> list[dict[str, str]]:
-        """Project surface events into provider-visible chat messages."""
+        """Project surface events into provider-visible chat messages with compaction support."""
+        watermark_idx = -1
+        summary_text: str | None = None
+
+        for _idx, event in enumerate(self.events):
+            if event.type in ("session/compacted", "compacted"):
+                upto = event.data.get("upto")
+                if isinstance(upto, int):
+                    watermark_idx = max(watermark_idx, upto)
+                    s = event.data.get("summary")
+                    if isinstance(s, str):
+                        summary_text = s
+
         messages: list[dict[str, str]] = []
-        for event in self.events:
-            if event.type == "user/message":
-                messages.append({"role": "user", "content": event.data["content"]})
+        if watermark_idx >= 0 and summary_text:
+            messages.append({"role": "user", "content": f"[compacted history] {summary_text}"})
+
+        for idx, event in enumerate(self.events):
+            if idx < watermark_idx:
+                continue
+            if event.type in ("user/message", "system/message"):
+                role = "system" if event.type == "system/message" else "user"
+                messages.append({"role": role, "content": str(event.data.get("content", ""))})
             elif event.type == "assistant/message":
-                messages.append({"role": "assistant", "content": event.data["content"]})
+                messages.append({"role": "assistant", "content": str(event.data.get("content", ""))})
             elif event.type == "tool/result":
-                messages.append({"role": "tool", "content": event.data["content"]})
+                messages.append({"role": "tool", "content": str(event.data.get("content", ""))})
         return messages
 
     def tail(self, count: int = 10) -> list[SessionEvent]:
         return self.events[-count:]
+

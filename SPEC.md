@@ -59,3 +59,39 @@ Extend `glmharness` beyond one-shot CLI execution by providing:
 - Unit tests for JSON-RPC 2.0 protocol server (requests, responses, notifications, error frames).
 - CLI integration tests for `serve` and `repl` modes.
 - Strict pyright 0 errors, ruff clean, 100% pytest pass rate.
+
+---
+
+## Phase 4: Dynamic Multi-Harness (DMH) Integration & Replay / Compaction
+
+### Goal
+1. Support multi-turn history reconstruction and replay from external session logs (`replay.from_log: true`).
+2. Implement session token / message compaction to keep long-running multi-turn sessions within budget.
+3. Integrate with Dynamic Multi-Harness (`dmh`), enabling runtime switching into `glm-5.3-flash`.
+
+### Architecture & Components
+
+#### 1. History Replay & Projection Import (`src/glmharness/session.py`)
+- `SessionLog.import_projection(projection: list[dict[str, Any]])`:
+  - Ingests pre-switch surface history (`user`, `assistant`, `tool` messages) and appends durable `SessionEvent`s.
+- `SessionLog.import_log(path: Path | str)`:
+  - Ingests foreign or prior JSONL logs.
+- CLI flags: `--replay-log <path>` and `--projection <json_or_path>`.
+
+#### 2. Session Compaction (`src/glmharness/compaction.py`)
+- `CompactionPlugin` and `compact_session(log: SessionLog, threshold: int, keep_rounds: int, strategy: str)`:
+  - Truncates or summarizes turns older than watermark.
+  - Appends `"session/compacted"` event with `upto`, `dropped_count`, `summary`.
+- `SessionLog.derive_messages()`:
+  - Honors `session/compacted` watermark, rendering `[compacted history] <summary>` followed only by events >= watermark.
+- Configurable via `GLMH_COMPACTION_THRESHOLD`, `GLMH_COMPACTION_KEEP_ROUNDS`, `--compaction-threshold`, `--compaction-keep-rounds`.
+
+#### 3. Protocol Server & DMH Adapter (`src/glmharness/server.py` & `dmh/glm_runtime.py`)
+- `src/glmharness/server.py`:
+  - Advertises `replay.from_log: true` and `compaction: true` in `initialize`.
+  - Accepts `projection` in `agent/send` and `session/import` RPC.
+  - Exposes `session/compact` RPC.
+- DMH `dmh/glm_runtime.py`:
+  - Sets `GLM_CAPABILITIES["replay.from_log"] = True` and `GLM_CAPABILITIES["compaction"] = True`.
+  - Replays prior projection history into session before turn execution, supporting seamless runtime switching.
+

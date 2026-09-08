@@ -71,6 +71,11 @@ set of recognized envs with their defaults:
 | `GLMH_CORRUPT_POLICY` | `skip` | `skip` / `rename` / `fail` on bad session JSONL |
 | `GLMH_WORKSPACE` | cwd | workspace root directory for tools (`--workspace`) |
 | `GLMH_SANDBOX` | `allow` | sandbox policy (`allow`, `deny`, `ask`) |
+| `GLMH_COMPACTION_THRESHOLD` | `0` | token or turn threshold for automated history compaction (`--compaction-threshold`) |
+| `GLMH_COMPACTION_KEEP_ROUNDS` | `4` | recent interaction turns to keep uncompacted (`--compaction-keep-rounds`) |
+| `GLMH_COMPACTION_STRATEGY` | `summarize` | `summarize` or `truncate` (`--compaction-strategy`) |
+| `GLMH_REPLAY_LOG` | — | JSONL session log to replay / reconstruct history from (`--replay-log`) |
+| `GLMH_PROJECTION` | — | JSON array of prior messages to replay from (`--projection`) |
 
 Unknown `GLMH_*` variables are logged and ignored — typos won't crash the
 harness.

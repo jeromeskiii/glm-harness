@@ -14,6 +14,7 @@ __version__ = "0.3.2"
 
 from .builtin_tools import BuiltinToolsPlugin, resolve_safe_path
 from .bus import EventBus
+from .compaction import CompactionPlugin, compact_session
 from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
 from .context import Context, Plugin, PluginLoader
 from .errors import (
@@ -39,6 +40,7 @@ __all__ = [
     "AgentLoop",
     "BasePlugin",
     "BuiltinToolsPlugin",
+    "CompactionPlugin",
     "ConfigError",
     "Context",
     "EventBus",
@@ -63,6 +65,7 @@ __all__ = [
     "ToolRegistry",
     "TransformersGLM",
     "__version__",
+    "compact_session",
     "looks_like_snapshot",
     "parse_tool_calls",
     "resolve_model_path",

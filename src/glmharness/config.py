@@ -43,6 +43,11 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "API_BASE": ("api_base", "str", None),
     "API_KEY": ("api_key", "str", None),
     "MODEL": ("model_name", "str", None),
+    "COMPACTION_THRESHOLD": ("compaction_threshold", "int", None),
+    "COMPACTION_KEEP_ROUNDS": ("compaction_keep_rounds", "int", None),
+    "COMPACTION_STRATEGY": ("compaction_strategy", "str", ("summarize", "truncate")),
+    "REPLAY_LOG": ("replay_log", "path", None),
+    "PROJECTION": ("projection", "str", None),
 }
 
 
@@ -86,6 +91,13 @@ class HarnessConfig:
     # sandbox & workspace
     workspace_dir: Path | None = None
     sandbox_mode: str = "allow"
+
+    # compaction & replay
+    compaction_threshold: int = 0
+    compaction_keep_rounds: int = 4
+    compaction_strategy: str = "summarize"
+    replay_log: Path | None = None
+    projection: str | None = None
 
     # runtime (not from env)
     prompt: str = ""

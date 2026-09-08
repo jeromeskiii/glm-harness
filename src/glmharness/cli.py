@@ -23,13 +23,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import json
 import signal
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 from . import __version__
 from .builtin_tools import BuiltinToolsPlugin
+from .compaction import CompactionPlugin
 from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
 from .context import Context, PluginLoader
 from .errors import ConfigError, HarnessError, ProviderError
@@ -138,6 +141,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="start JSON-RPC 2.0 stdio protocol server",
     )
+    parser.add_argument(
+        "--compaction-threshold",
+        type=int,
+        default=None,
+        help="token or turn threshold triggering automated compaction (0 to disable)",
+    )
+    parser.add_argument(
+        "--compaction-keep-rounds",
+        type=int,
+        default=None,
+        help="number of recent interaction rounds to retain uncompacted (default: 4)",
+    )
+    parser.add_argument(
+        "--compaction-strategy",
+        choices=("summarize", "truncate"),
+        default=None,
+        help="compaction strategy (summarize or truncate)",
+    )
+    parser.add_argument(
+        "--replay-log",
+        type=Path,
+        default=None,
+        help="path to external session JSONL log to replay/reconstruct history from",
+    )
+    parser.add_argument(
+        "--projection",
+        default=None,
+        help="JSON array of messages [{'role': ..., 'content': ...}] to replay from",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -160,6 +192,11 @@ _CLI_FIELD_FOR = {
     "api_base": "api_base",
     "api_key": "api_key",
     "model": "model_name",
+    "compaction_threshold": "compaction_threshold",
+    "compaction_keep_rounds": "compaction_keep_rounds",
+    "compaction_strategy": "compaction_strategy",
+    "replay_log": "replay_log",
+    "projection": "projection",
 }
 
 
@@ -206,6 +243,15 @@ async def run(config: HarnessConfig) -> int:
 
     ctx = Context()
     sessions = SessionLog(path=config.session_path, corrupt_policy=config.corrupt_policy)
+    if config.replay_log is not None:
+        sessions.import_log(config.replay_log)
+    if config.projection is not None:
+        try:
+            proj_data: object = json.loads(config.projection)
+            if isinstance(proj_data, list):
+                sessions.import_projection(cast(list[dict[str, Any]], proj_data))
+        except json.JSONDecodeError:
+            pass
     tools = ToolRegistry(ctx, tool_timeout_s=config.tool_timeout_s)
     if config.mock is not None:
         llm: object = MockLLM(config.mock)
@@ -247,6 +293,11 @@ async def run(config: HarnessConfig) -> int:
                 BuiltinToolsPlugin(config.workspace_dir),
                 SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
                 SafetyPlugin(config.tool_allowlist),
+                CompactionPlugin(
+                    threshold=config.compaction_threshold,
+                    keep_rounds=config.compaction_keep_rounds,
+                    strategy=config.compaction_strategy,
+                ),
             ]
         )
         agent = AgentLoop(

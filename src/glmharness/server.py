@@ -15,6 +15,7 @@ from typing import Any, TextIO, cast
 
 from . import __version__
 from .builtin_tools import BuiltinToolsPlugin
+from .compaction import CompactionPlugin, compact_session
 from .config import HarnessConfig, resolve_model_path
 from .context import Context, PluginLoader
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
@@ -30,7 +31,7 @@ _SERVER_CAPABILITIES = {
     "replay.from_log": True,
     "tools.native": True,
     "tools.code": True,
-    "compaction": False,
+    "compaction": True,
     "approval.ask": True,
     "subagents.native": False,
     "plan": False,
@@ -107,6 +108,11 @@ class ProtocolServer:
                 BuiltinToolsPlugin(self.config.workspace_dir),
                 SandboxPlugin(mode=self.config.sandbox_mode),  # type: ignore[arg-type]
                 SafetyPlugin(self.config.tool_allowlist),
+                CompactionPlugin(
+                    threshold=self.config.compaction_threshold,
+                    keep_rounds=self.config.compaction_keep_rounds,
+                    strategy=self.config.compaction_strategy,
+                ),
             ]
         )
 
@@ -147,8 +153,46 @@ class ProtocolServer:
 
         if method == "session/new":
             new_id = str(params.get("sessionId") or f"session-{uuid.uuid4().hex[:8]}")
-            self.sessions[new_id] = SessionLog()
+            s_log = SessionLog()
+            proj_new: object = params.get("projection")
+            if isinstance(proj_new, list):
+                s_log.import_projection(cast(list[dict[str, Any]], proj_new))
+            self.sessions[new_id] = s_log
             self._success(req_id, {"sessionId": new_id})
+            return
+
+        if method == "session/import":
+            session_id = str(params.get("sessionId", "default"))
+            session_log = self.sessions.get(session_id)
+            if session_log is None:
+                session_log = SessionLog()
+                self.sessions[session_id] = session_log
+            imported = 0
+            proj_raw: object = params.get("projection")
+            if isinstance(proj_raw, list):
+                imported += session_log.import_projection(cast(list[dict[str, Any]], proj_raw))
+            log_path_raw: object = params.get("logPath")
+            if isinstance(log_path_raw, str):
+                imported += session_log.import_log(log_path_raw)
+            self._success(req_id, {"sessionId": session_id, "imported": imported})
+            return
+
+        if method == "session/compact":
+            session_id = str(params.get("sessionId", "default"))
+            session_log = self.sessions.get(session_id)
+            if session_log is None:
+                self._error(req_id, -32602, f"Session not found: {session_id}")
+                return
+            threshold = int(params.get("threshold", 4000))
+            keep_rounds = int(params.get("keepRounds", 4))
+            strategy = str(params.get("strategy", "summarize"))
+            res = compact_session(
+                session_log,
+                threshold=threshold,
+                keep_rounds=keep_rounds,
+                strategy=strategy,
+            )
+            self._success(req_id, res)
             return
 
         if method == "tools/list":
@@ -175,6 +219,10 @@ class ProtocolServer:
             if session_log is None:
                 session_log = SessionLog()
                 self.sessions[session_id] = session_log
+
+            proj_raw: object = params.get("projection")
+            if isinstance(proj_raw, list) and not session_log.events:
+                session_log.import_projection(cast(list[dict[str, Any]], proj_raw))
 
             assert self.ctx is not None
             assert self.tools is not None

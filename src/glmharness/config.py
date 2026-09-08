@@ -24,6 +24,7 @@ _ENV_PREFIX = "GLMH_"
 _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "MODEL_PATH": ("model_path", "path", None),
     "SESSION": ("session_path", "path", None),
+    "MOCK": ("mock", "str", None),
     "REASONING_EFFORT": ("reasoning_effort", "str", ("low", "high", "max")),
     "MAX_NEW_TOKENS": ("max_new_tokens", "int", None),
     "MAX_ROUNDS": ("max_rounds", "int", None),
@@ -36,6 +37,7 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "LOG_FORMAT": ("log_format", "str", ("text", "json")),
     "LOG_LEVEL": ("log_level", "str", None),
     "CORRUPT_POLICY": ("corrupt_policy", "str", ("skip", "rename", "fail")),
+    "TOOL_ALLOWLIST": ("tool_allowlist", "csv", None),
 }
 
 
@@ -55,7 +57,7 @@ class HarnessConfig:
 
     # loop
     max_rounds: int = 12
-    request_timeout_s: float = 0.0
+    request_timeout_s: float = 300.0
     tool_timeout_s: float = 30.0
 
     # retry (exponential backoff with jitter)
@@ -67,6 +69,9 @@ class HarnessConfig:
     # observability
     log_format: str = "text"
     log_level: str = "INFO"
+
+    # safety: empty means every registered tool is eligible
+    tool_allowlist: tuple[str, ...] = ()
 
     # runtime (not from env)
     prompt: str = ""
@@ -88,11 +93,13 @@ class HarnessConfig:
                 continue
             try:
                 if kind == "int":
-                    value: int | float | Path | str = int(raw)
+                    value: int | float | Path | str | tuple[str, ...] = int(raw)
                 elif kind == "float":
                     value = float(raw)
                 elif kind == "path":
                     value = Path(raw)
+                elif kind == "csv":
+                    value = tuple(part.strip() for part in raw.split(",") if part.strip())
                 else:
                     value = raw
             except ValueError as exc:
@@ -144,6 +151,30 @@ class HarnessConfig:
     def unknown_env_keys(self) -> list[str]:
         """``GLMH_*`` variables that map to nothing (typo guard)."""
         return sorted(self.unknown_env)
+
+
+def looks_like_snapshot(path: Path) -> bool:
+    """True when ``path`` looks like a GLM-5.3-Flash transformers snapshot."""
+    return (path / "config.json").is_file() and (path / "tokenizer_config.json").is_file()
+
+
+def resolve_model_path(config: HarnessConfig, *, cwd: Path | None = None) -> HarnessConfig:
+    """Fill ``model_path`` from cwd when it is a snapshot and nothing else is set.
+
+    Mock runs never need a snapshot. An explicit ``model_path`` wins. Otherwise
+    a checkout of this repository (cwd containing ``config.json`` +
+    ``tokenizer_config.json``) is the documented default.
+    """
+    if config.mock is not None or config.model_path is not None:
+        return config
+    here = cwd if cwd is not None else Path.cwd()
+    if looks_like_snapshot(here):
+        config.model_path = here
+        return config
+    raise ConfigError(
+        "either --mock or a model path (--model-path / GLMH_MODEL_PATH) is "
+        "required (cwd is not a GLM snapshot)"
+    )
 
 
 def _hash_fraction(seed: int) -> float:

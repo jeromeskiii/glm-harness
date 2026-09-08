@@ -9,7 +9,10 @@ from glmharness.errors import ConfigError
 
 
 def test_defaults_validate() -> None:
-    HarnessConfig().validate()
+    config = HarnessConfig()
+    config.validate()
+    assert config.request_timeout_s == 300.0
+    assert config.tool_timeout_s == 30.0
 
 
 def test_reasoning_effort_must_be_low_high_max() -> None:
@@ -62,10 +65,14 @@ def test_from_env_reads_known_vars(monkeypatch) -> None:
     monkeypatch.setenv("GLMH_MAX_ROUNDS", "5")
     monkeypatch.setenv("GLMH_REASONING_EFFORT", "low")
     monkeypatch.setenv("GLMH_LOG_FORMAT", "json")
+    monkeypatch.setenv("GLMH_MOCK", "hello")
+    monkeypatch.setenv("GLMH_TOOL_ALLOWLIST", "echo, search")
     config = HarnessConfig.from_env()
     assert config.max_rounds == 5
     assert config.reasoning_effort == "low"
     assert config.log_format == "json"
+    assert config.mock == "hello"
+    assert config.tool_allowlist == ("echo", "search")
 
 
 def test_from_env_rejects_bad_values(monkeypatch) -> None:
@@ -84,3 +91,26 @@ def test_from_env_unknown_keys_collected(monkeypatch) -> None:
 
 def test_request_timeout_zero_disabled_is_valid() -> None:
     HarnessConfig(request_timeout_s=0).validate()
+
+
+def test_looks_like_snapshot(tmp_path) -> None:
+    from glmharness.config import looks_like_snapshot, resolve_model_path
+
+    assert looks_like_snapshot(tmp_path) is False
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "tokenizer_config.json").write_text("{}")
+    assert looks_like_snapshot(tmp_path) is True
+    config = HarnessConfig()
+    resolve_model_path(config, cwd=tmp_path)
+    assert config.model_path == tmp_path
+
+
+def test_resolve_model_path_keeps_mock(tmp_path) -> None:
+    from glmharness.config import resolve_model_path
+    from glmharness.errors import ConfigError
+
+    config = HarnessConfig(mock="hi")
+    resolve_model_path(config, cwd=tmp_path)
+    assert config.model_path is None
+    with pytest.raises(ConfigError, match="cwd is not a GLM snapshot"):
+        resolve_model_path(HarnessConfig(), cwd=tmp_path)

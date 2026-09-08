@@ -3,6 +3,57 @@
 All notable changes to the GLM harness ship in this file. Versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-09-05
+
+Operator default: request timeout is on.
+
+### Changed
+
+- ``HarnessConfig.request_timeout_s`` (and therefore the CLI / ``GLMH_REQUEST_TIMEOUT_S``)
+  defaults to **300 seconds**. ``0`` still disables the bound for long local
+  generations. ``AgentLoop`` constructed directly still defaults to ``0`` so
+  library callers are not silently bounded.
+- ``--doctor`` only prints the timeout ``WARN`` when the bound is disabled.
+
+## [0.3.1] - 2026-09-05
+
+Second production pass: timeouts, empty prompts, and doctor honesty.
+
+### Changed
+
+- A spent per-request timeout is now ``ProviderTimeout`` (CLI exit 3,
+  retryable until ``max_retries`` is exhausted) instead of a raw
+  ``TimeoutError`` (exit 4).
+- An empty prompt on a non-TTY (or EOF) is a config error, not a hang
+  on ``input()``.
+- ``--doctor`` resolves the snapshot the same way as ``run``, prints
+  ``WARN`` when ``request_timeout_s`` is 0, and fails when cwd is not a
+  GLM snapshot and ``--mock`` is unset.
+
+## [0.3.0] - 2026-09-05
+
+Production hardening for the local runner. Public API stays backward
+compatible; new names are additive (`SafetyPlugin`,
+`validate_tool_arguments`, `looks_like_snapshot`, `resolve_model_path`).
+
+### Added
+
+- `GLMH_MOCK` is now a real env knob (it was documented, not wired).
+- Tool-argument JSON Schema subset (`type` / `required` / `properties` /
+  `additionalProperties` / `items`) runs before every handler. Bad args
+  return `INVALID_ARGS` and never invoke the tool.
+- `SafetyPlugin` + `GLMH_TOOL_ALLOWLIST` / `--tool-allowlist`: an explicit
+  name list denies every other tool at `tools/pre-execute`. Empty list is
+  a no-op so the plugin is always mounted.
+- `glm-harness --doctor` validates config, snapshot layout, and the
+  optional `inference` extra without running a turn.
+- Cwd that looks like a GLM snapshot (`config.json` +
+  `tokenizer_config.json`) is the default model path, matching the README.
+
+### Changed
+
+- Package version `0.3.0`.
+
 ## [0.2.0] - 2026-09-05
 
 The harness is now production-ready: installable Python package,

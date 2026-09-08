@@ -22,9 +22,12 @@ the harness falls back to `MockLLM` for offline smoke runs.
 # Deterministic mock (no model weights, no GPU required)
 glm-harness --mock 'hello from the mock adapter' 'say hello'
 
-# Live local snapshot — defaults to the repo root, override with
-# GLMH_MODEL_PATH or --model-path.
+# Live local snapshot — cwd is used when it contains config.json +
+# tokenizer_config.json; override with GLMH_MODEL_PATH or --model-path.
 glm-harness 'Explain this repository'
+
+# Pre-flight: config, snapshot layout, inference extra
+glm-harness --doctor
 
 # Persist the conversation for replay / debugging
 glm-harness --session .sessions/demo.jsonl 'Plan a release'
@@ -40,12 +43,13 @@ set of recognized envs with their defaults:
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `GLMH_MODEL_PATH` | repo root | path to a GLM-5.3-Flash snapshot |
-| `GLMH_MOCK` | — | if set, use a deterministic response instead of the model |
+| `GLMH_MODEL_PATH` | cwd if it is a snapshot | path to a GLM-5.3-Flash snapshot |
+| `GLMH_MOCK` | — | if set, use this string as a deterministic response instead of the model |
+| `GLMH_TOOL_ALLOWLIST` | empty (all registered) | comma-separated tool names the model may call |
 | `GLMH_REASONING_EFFORT` | `max` | one of `low`, `high`, `max` |
 | `GLMH_MAX_NEW_TOKENS` | 8192 | per-request token budget |
 | `GLMH_MAX_ROUNDS` | 12 | tool-calling rounds per turn |
-| `GLMH_REQUEST_TIMEOUT_S` | 0 (off) | per-request wall clock; 0 disables |
+| `GLMH_REQUEST_TIMEOUT_S` | 300 | per-request wall clock in seconds; 0 disables |
 | `GLMH_TOOL_TIMEOUT_S` | 30 | per-tool timeout |
 | `GLMH_MAX_RETRIES` | 2 | retries on transient provider failure |
 | `GLMH_RETRY_BASE_DELAY_S` | 1.0 | exponential-backoff base |
@@ -64,7 +68,7 @@ harness.
 | --- | --- |
 | 0 | success |
 | 2 | configuration error |
-| 3 | provider failure |
+| 3 | provider failure (including a spent request timeout) |
 | 4 | tool/pipeline failure |
 | 130 | cancelled (SIGINT/SIGTERM) |
 
@@ -80,8 +84,8 @@ ruff check src tests                                      # lint
 
 This is a one-shot local runner. The kernel stays minimal on purpose:
 
-- **Sandbox / approval** are not in the kernel. Add them as a plugin that
-  listens on `tools/pre-execute`.
+- **OS sandbox** is not in the kernel. `SafetyPlugin` is the production
+  allowlist gate on `tools/pre-execute`; add an approval plugin the same way.
 - **Network protocol** is out of scope; this CLI is the only entry point.
 - **Streaming backpressure** is bounded only by the consumer's iterator;
   a hosting carrier would add explicit flow control.

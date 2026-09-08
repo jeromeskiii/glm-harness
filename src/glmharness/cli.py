@@ -29,13 +29,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
-from .config import HarnessConfig
+from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
 from .context import Context, PluginLoader
 from .errors import ConfigError, HarnessError, ProviderError
 from .llm import MockLLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
-from .plugins import BasePlugin
+from .plugins import BasePlugin, SafetyPlugin
 from .session import SessionLog
 from .tools import ToolRegistry
 
@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--request-timeout-s",
         type=float,
         default=None,
-        help="per-request timeout in seconds (0 disables, default 0)",
+        help="per-request timeout in seconds (default 300; 0 disables)",
     )
     parser.add_argument("--tool-timeout-s", type=float, default=None)
     parser.add_argument("--max-retries", type=int, default=None)
@@ -87,6 +87,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--log-format", choices=("text", "json"), default=None)
     parser.add_argument("--log-level", default=None)
+    parser.add_argument(
+        "--tool-allowlist",
+        default=None,
+        help="comma-separated tool names the model may call (default: all registered)",
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="validate config, snapshot, and optional inference extra; do not run a turn",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -117,6 +127,10 @@ def _merge_config(args: argparse.Namespace) -> HarnessConfig:
             overrides[target] = value
     if args.prompt is not None:
         overrides["prompt"] = args.prompt
+    if args.tool_allowlist is not None:
+        overrides["tool_allowlist"] = tuple(
+            part.strip() for part in str(args.tool_allowlist).split(",") if part.strip()
+        )
     # ``dataclasses.replace`` keeps the static-type contract: every key is
     # validated against the field declaration rather than routed through
     # ``Any`` like ``HarnessConfig(**dict)`` would.
@@ -133,12 +147,16 @@ async def run(config: HarnessConfig) -> int:
         logger.warning("unknown env var; ignoring", extra={"env": key})
 
     if not config.prompt:
-        config.prompt = input("you> ")
+        if not sys.stdin.isatty():
+            raise ConfigError("prompt is required (pass it as an argument)")
+        try:
+            config.prompt = input("you> ")
+        except EOFError as exc:
+            raise ConfigError("prompt is required (stdin closed)") from exc
+    if not str(config.prompt).strip():
+        raise ConfigError("prompt is empty")
 
-    if config.mock is None and config.model_path is None:
-        raise ConfigError(
-            "either --mock or a model path (--model-path / GLMH_MODEL_PATH) is required"
-        )
+    resolve_model_path(config)
 
     ctx = Context()
     sessions = SessionLog(path=config.session_path, corrupt_policy=config.corrupt_policy)
@@ -169,7 +187,9 @@ async def run(config: HarnessConfig) -> int:
 
     try:
         loader = PluginLoader(ctx)
-        await loader.mount([BasePlugin(sessions, tools)])
+        await loader.mount(
+            [BasePlugin(sessions, tools), SafetyPlugin(config.tool_allowlist)]
+        )
         agent = AgentLoop(
             ctx,
             llm,  # type: ignore[arg-type]
@@ -212,10 +232,59 @@ async def run(config: HarnessConfig) -> int:
         await ctx.close()
 
 
+def doctor(config: HarnessConfig) -> int:
+    """Print a pre-flight report. Exit 0 if the harness can run a turn."""
+    configure_logging(fmt=config.log_format, level=config.log_level)
+    rows: list[tuple[str, str, bool]] = []
+    rows.append(("python", sys.version.split()[0], True))
+    rows.append(("glmharness", __version__, True))
+    try:
+        config.validate()
+        rows.append(("config", "ok", True))
+    except ConfigError as exc:
+        rows.append(("config", str(exc), False))
+    if config.mock is not None:
+        rows.append(("provider", f"mock ({config.mock!r})", True))
+    else:
+        try:
+            resolve_model_path(config)
+        except ConfigError as exc:
+            rows.append(("snapshot", str(exc), False))
+        else:
+            snapshot = config.model_path or Path.cwd()
+            ok = looks_like_snapshot(snapshot)
+            detail = str(snapshot.resolve())
+            if not ok:
+                detail = f"{snapshot} is missing config.json or tokenizer_config.json"
+            rows.append(("snapshot", detail, ok))
+        try:
+            import transformers  # type: ignore[import-not-found]
+
+            rows.append(("transformers", getattr(transformers, "__version__", "ok"), True))
+        except ImportError:
+            rows.append(
+                ("transformers", "missing — pip install 'glmharness[inference]'", False)
+            )
+    if config.tool_allowlist:
+        rows.append(("tool_allowlist", ",".join(config.tool_allowlist), True))
+    failed = False
+    for name, detail, ok in rows:
+        mark = "ok" if ok else "FAIL"
+        sys.stdout.write(f"{mark:4}  {name}: {detail}\n")
+        failed = failed or not ok
+    if config.request_timeout_s <= 0:
+        sys.stdout.write(
+            "WARN  request_timeout: disabled (0); provider calls have no wall-clock bound\n"
+        )
+    return 2 if failed else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         config = _merge_config(args)
+        if args.doctor:
+            return doctor(config)
         return asyncio.run(run(config))
     except ConfigError as exc:
         sys.stderr.write(f"config error: {exc}\n")

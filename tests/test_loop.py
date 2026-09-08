@@ -12,6 +12,7 @@ from glmharness import (
     Context,
     MockLLM,
     ProviderError,
+    ProviderTimeout,
     SessionLog,
     Tool,
     ToolRegistry,
@@ -236,8 +237,9 @@ def test_loop_enforces_request_timeout() -> None:
             yield "late"
 
     config = AgentLoop(ctx, SlowLLM(), log, tools, request_timeout_s=0.05, max_retries=0)
-    with pytest.raises(TimeoutError):
+    with pytest.raises(ProviderTimeout):
         asyncio.run(config.run("x"))
+    assert log.events[-1].data["status"] == "failed"
 
 
 def test_loop_cancellation_closes_turn_cancelled() -> None:

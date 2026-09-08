@@ -16,7 +16,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from .context import Context
 from .logging import get_logger
@@ -25,6 +25,92 @@ _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL | re.IGNOR
 _ARGS_RE = re.compile(
     r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.DOTALL
 )
+
+
+def validate_tool_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> str | None:
+    """Return a human error or ``None`` if ``arguments`` satisfy ``schema``.
+
+    JSON Schema subset: ``type``, ``required``, ``properties``,
+    ``additionalProperties``, ``items``. Unknown keywords are ignored so a
+    richer schema still fails closed on the fields we understand.
+    """
+    if not schema:
+        return None
+    return _check_value(schema, arguments, path="$")
+
+
+def _as_schema(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return cast(dict[str, Any], value)
+
+
+def _check_value(schema: dict[str, Any], value: Any, path: str) -> str | None:
+    expected = schema.get("type")
+    if expected is not None:
+        if not _type_matches(expected, value):
+            return f"{path}: expected {expected}, got {type(value).__name__}"
+    if expected == "object" or (expected is None and isinstance(value, dict) and "properties" in schema):
+        if not isinstance(value, dict):
+            return f"{path}: expected object"
+        mapping = cast(dict[str, Any], value)
+        required_raw = schema.get("required")
+        if isinstance(required_raw, list):
+            for key in cast(list[object], required_raw):
+                if key not in mapping:
+                    return f"{path}: missing required property {key!r}"
+        properties = _as_schema(schema.get("properties") or {})
+        if properties is not None:
+            for key, subschema in properties.items():
+                nested = _as_schema(subschema)
+                if key in mapping and nested is not None:
+                    err = _check_value(nested, mapping[key], f"{path}.{key}")
+                    if err is not None:
+                        return err
+        additional = schema.get("additionalProperties", True)
+        if additional is False and properties is not None:
+            extra = [str(key) for key in mapping if key not in properties]
+            if extra:
+                return f"{path}: unexpected properties {extra}"
+        additional_schema = _as_schema(additional)
+        if additional_schema is not None:
+            for key, item in mapping.items():
+                if properties is not None and key in properties:
+                    continue
+                err = _check_value(additional_schema, item, f"{path}.{key}")
+                if err is not None:
+                    return err
+    if expected == "array" and isinstance(value, list):
+        items = _as_schema(schema.get("items"))
+        if items is not None:
+            sequence = cast(list[Any], value)
+            for index, item in enumerate(sequence):
+                err = _check_value(items, item, f"{path}[{index}]")
+                if err is not None:
+                    return err
+    return None
+
+
+def _type_matches(expected: object, value: Any) -> bool:
+    types: list[object] = (
+        cast(list[object], expected) if isinstance(expected, list) else [expected]
+    )
+    for item in types:
+        if item == "object" and isinstance(value, dict):
+            return True
+        if item == "array" and isinstance(value, list):
+            return True
+        if item == "string" and isinstance(value, str):
+            return True
+        if item == "integer" and isinstance(value, int) and not isinstance(value, bool):
+            return True
+        if item == "number" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            return True
+        if item == "boolean" and isinstance(value, bool):
+            return True
+        if item == "null" and value is None:
+            return True
+    return False
 
 
 def parse_tool_calls(text: str) -> list[dict[str, Any]]:
@@ -134,14 +220,26 @@ class ToolRegistry:
             return self._finish(call, {"ok": False, "error": "UNKNOWN_TOOL"})
         if not tool.allowed:
             return self._finish(call, {"ok": False, "error": "DENIED_BY_POLICY"})
+        raw_arguments = call.get("arguments", {})
+        if not isinstance(raw_arguments, dict):
+            return self._finish(
+                call,
+                {"ok": False, "error": "INVALID_ARGS", "content": "arguments must be an object"},
+            )
+        call_args = cast(dict[str, Any], raw_arguments)
+        schema_error = validate_tool_arguments(tool.schema, call_args)
+        if schema_error is not None:
+            return self._finish(
+                call, {"ok": False, "error": "INVALID_ARGS", "content": schema_error}
+            )
         started = asyncio.get_running_loop().time()
         try:
             if self.tool_timeout_s > 0:
                 result = await asyncio.wait_for(
-                    self._invoke(tool, call["arguments"]), timeout=self.tool_timeout_s
+                    self._invoke(tool, call_args), timeout=self.tool_timeout_s
                 )
             else:
-                result = await self._invoke(tool, call["arguments"])
+                result = await self._invoke(tool, call_args)
         except TimeoutError:
             get_logger().warning(
                 "tool timed out",

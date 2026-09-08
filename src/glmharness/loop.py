@@ -21,7 +21,7 @@ from contextlib import nullcontext
 from typing import Any
 
 from .context import Context
-from .errors import ProviderError
+from .errors import ProviderError, ProviderTimeout
 from .llm import LLM
 from .logging import get_logger
 from .session import SessionLog
@@ -146,6 +146,15 @@ class AgentLoop:
                 async with timeout_ctx:
                     async for chunk in self.llm.stream(messages, tools):
                         buffer.append(chunk)
+            except TimeoutError as exc:
+                # asyncio.timeout raises TimeoutError (an OSError subclass).
+                # Catch it before ``_RETRYABLE`` so a spent budget becomes
+                # ProviderTimeout (CLI exit 3), not a raw OSError (exit 4).
+                wrapped = ProviderTimeout(self.request_timeout_s)
+                if attempt > self.max_retries:
+                    raise wrapped from exc
+                await self._backoff(attempt, wrapped, logger)
+                continue
             except _RETRYABLE as exc:
                 if attempt > self.max_retries:
                     raise

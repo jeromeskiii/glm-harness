@@ -110,3 +110,84 @@ def test_register_rejects_duplicates(ctx) -> None:
     registry.register(Tool("echo", "d", {"type": "object"}, lambda a: a))
     with pytest.raises(RuntimeError, match="duplicate tool"):
         registry.register(Tool("echo", "d", {"type": "object"}, lambda a: a))
+
+
+async def test_invalid_args_fail_closed(ctx, log) -> None:
+    ctx.provide("sessions", log)
+    registry = ToolRegistry(ctx)
+    registry.register(
+        Tool(
+            "add",
+            "add",
+            {
+                "type": "object",
+                "required": ["a", "b"],
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"},
+                },
+                "additionalProperties": False,
+            },
+            lambda args: args["a"] + args["b"],
+        )
+    )
+    missing = await registry.execute("add", {"a": 1})
+    assert missing["error"] == "INVALID_ARGS"
+    assert missing["ok"] is False
+    extra = await registry.execute("add", {"a": 1, "b": 2, "c": 3})
+    assert extra["error"] == "INVALID_ARGS"
+    wrong = await registry.execute("add", {"a": "x", "b": 2})
+    assert wrong["error"] == "INVALID_ARGS"
+    ok = await registry.execute("add", {"a": 1, "b": 2})
+    assert ok["ok"] is True
+
+
+def test_validate_tool_arguments_types() -> None:
+    from glmharness.tools import validate_tool_arguments
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "n": {"type": "number"},
+            "flag": {"type": "boolean"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["name"],
+    }
+    assert validate_tool_arguments(schema, {"name": "x", "n": 1.5, "flag": True, "tags": ["a"]}) is None
+    assert validate_tool_arguments(schema, {}) is not None
+    assert validate_tool_arguments(schema, {"name": 1}) is not None
+    assert validate_tool_arguments({}, {"anything": True}) is None
+    union = {"type": "object", "properties": {"id": {"type": ["string", "null"]}}}
+    assert validate_tool_arguments(union, {"id": None}) is None
+    assert validate_tool_arguments(union, {"id": 1}) is not None
+    extras = {"type": "object", "additionalProperties": {"type": "integer"}}
+    assert validate_tool_arguments(extras, {"a": 1, "b": 2}) is None
+    assert validate_tool_arguments(extras, {"a": "nope"}) is not None
+    assert validate_tool_arguments({"type": "array", "items": {"type": "string"}}, ["a"]) is None
+    assert validate_tool_arguments({"type": "array", "items": {"type": "string"}}, [1]) is not None
+
+
+async def test_pre_execute_non_dict_fails_loud(ctx) -> None:
+    async def bad(_call, _next):
+        return "nope"
+
+    ctx.on("tools/pre-execute", bad)
+    registry = ToolRegistry(ctx)
+    registry.register(Tool("echo", "echo", {"type": "object"}, lambda a: a))
+    with pytest.raises(TypeError, match="tools/pre-execute must return a dict"):
+        await registry.execute("echo", {})
+
+
+async def test_rewritten_non_object_arguments_are_invalid(ctx, log) -> None:
+    ctx.provide("sessions", log)
+
+    async def smash(call, next_):
+        return await next_({**call, "arguments": ["not", "an", "object"]})
+
+    ctx.on("tools/pre-execute", smash)
+    registry = ToolRegistry(ctx)
+    registry.register(Tool("echo", "echo", {"type": "object"}, lambda a: a))
+    result = await registry.execute("echo", {"x": 1})
+    assert result["error"] == "INVALID_ARGS"

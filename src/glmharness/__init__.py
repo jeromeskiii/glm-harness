@@ -11,7 +11,7 @@ the kernel.
 from __future__ import annotations
 
 from .bus import EventBus
-from .config import HarnessConfig
+from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
 from .context import Context, Plugin, PluginLoader
 from .errors import (
     ConfigError,
@@ -24,11 +24,11 @@ from .errors import (
 )
 from .llm import LLM, MockLLM, TransformersGLM
 from .loop import AgentLoop
-from .plugins import BasePlugin
+from .plugins import BasePlugin, SafetyPlugin
 from .session import SessionEvent, SessionLog
-from .tools import Tool, ToolRegistry, parse_tool_calls
+from .tools import Tool, ToolRegistry, parse_tool_calls, validate_tool_arguments
 
-__version__ = "0.2.0"
+__version__ = "0.3.2"
 
 __all__ = [
     "LLM",
@@ -45,6 +45,7 @@ __all__ = [
     "ProviderError",
     "ProviderTimeout",
     "ProviderUnavailable",
+    "SafetyPlugin",
     "SessionCorruptError",
     "SessionEvent",
     "SessionLog",
@@ -53,5 +54,8 @@ __all__ = [
     "ToolRegistry",
     "TransformersGLM",
     "__version__",
+    "looks_like_snapshot",
     "parse_tool_calls",
+    "resolve_model_path",
+    "validate_tool_arguments",
 ]

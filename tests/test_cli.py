@@ -84,6 +84,50 @@ def test_cli_exit_code_three_for_provider_error(monkeypatch) -> None:
     assert code == 3
 
 
+def test_doctor_mock_exits_zero(capsys) -> None:
+    code = main(["--doctor", "--mock", "hi"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "ok" in captured.out
+    assert "mock" in captured.out
+    assert "WARN  request_timeout" not in captured.out
+
+
+def test_doctor_warns_when_request_timeout_disabled(capsys) -> None:
+    code = main(["--doctor", "--mock", "hi", "--request-timeout-s", "0"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "WARN  request_timeout" in captured.out
+
+
+def test_doctor_fails_when_cwd_is_not_a_snapshot(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    code = main(["--doctor"])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "FAIL" in captured.out
+
+
+def test_cli_mock_from_env(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("GLMH_MOCK", "from-env")
+    code = main(["say hi"])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == "from-env"
+
+
+def test_cli_requires_prompt_when_stdin_is_not_a_tty(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    code = main(["--mock", "answer"])
+    assert code == 2
+    assert "prompt is required" in capsys.readouterr().err
+
+
+def test_parser_accepts_doctor_and_allowlist() -> None:
+    args = build_parser().parse_args(["--doctor", "--tool-allowlist", "echo,search"])
+    assert args.doctor is True
+    assert args.tool_allowlist == "echo,search"
+
+
 def test_cli_exit_code_four_for_other_runtime_error(monkeypatch) -> None:
     """Unclassified runtime failures inside the run loop map to exit code 4."""
     from glmharness.loop import AgentLoop

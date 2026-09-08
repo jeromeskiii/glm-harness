@@ -169,3 +169,36 @@ def test_cli_exit_code_four_for_other_runtime_error(monkeypatch) -> None:
     monkeypatch.setattr(AgentLoop, "run", boom_run)
     code = main(["--mock", "x", "y"])
     assert code == 4
+
+
+def test_cli_dispatch_repl(monkeypatch) -> None:
+    from glmharness import cli as cli_mod
+
+    called = False
+
+    async def mock_run_repl(config):
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.setattr(cli_mod, "run_repl", mock_run_repl)
+    code = main(["--repl", "--mock", "hi"])
+    assert code == 0
+    assert called is True
+
+
+def test_cli_dispatch_serve(monkeypatch) -> None:
+    from glmharness import cli as cli_mod
+
+    called = False
+
+    async def mock_run_server(config):
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.setattr(cli_mod, "run_server", mock_run_server)
+    code = main(["--serve", "--mock", "hi"])
+    assert code == 0
+    assert called is True
+

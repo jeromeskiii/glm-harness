@@ -1,16 +1,20 @@
 # Project State: GLM-5.3-Flash Harness
 
 ## Phase 1: Core Tool Battery & Execution Confinement (COMPLETED)
-- Shipped `builtin_tools.py` with `read_file`, `write_file`, `edit_file`, `list_dir`, `bash`.
-- Shipped `sandbox.py` with `SandboxPlugin` (`allow`, `deny`, `ask`).
-- 108 tests passing, strict type checking passing.
+- Shipped `builtin_tools.py` and `sandbox.py`.
+- 108 tests passing.
 
-## Current Phase: Phase 2 — Remote / OpenAI-Compatible LLM Adapter
-- **Status**: COMPLETED
-- **SPEC**: `SPEC.md` (Phase 2 FINALIZED)
+## Phase 2: Remote / OpenAI-Compatible LLM Adapter (COMPLETED)
+- Shipped `OpenAICompatibleGLM` with zero dependencies.
+- 115 tests passing.
 
-### Tasks
-- [x] Task 1: Implement `OpenAICompatibleGLM` in `src/glmharness/llm.py` with streaming HTTP/SSE and tool call translation.
-- [x] Task 2: Wire `api_base`, `api_key`, `model_name` into `HarnessConfig` and `glmharness/cli.py`.
-- [x] Task 3: Add comprehensive unit tests in `tests/test_llm_adapters.py` (text streaming, tool-calls streaming, error handling).
-- [x] Task 4: Empirical verification (`pytest` 115 passed, `pyright` strict 0 errors, `ruff` clean).
+## Phase 3: Interactive Carriers (REPL & Stdio Protocol Server) (COMPLETED)
+- Shipped `src/glmharness/repl.py` (interactive multi-turn terminal REPL with meta commands `/help`, `/tools`, `/clear`, `/session`, `/exit`).
+- Shipped `src/glmharness/server.py` (JSON-RPC 2.0 stdio protocol server supporting ABI v2, `initialize`, `agent/send`, `tools/list`, `tools/execute`, `session/list`, `session/new`).
+- Wired `--repl` and `--serve` flags in `src/glmharness/cli.py`.
+- 125 tests passing, 0 pyright errors, 0 ruff warnings.
+
+## Current Phase: Phase 4 — Dynamic Multi-Harness (DMH) Integration & Replay / Compaction
+- **Status**: READY_TO_START
+- **SPEC**: `SPEC.md` (Phase 4)
+

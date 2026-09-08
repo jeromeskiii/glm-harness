@@ -1,0 +1,264 @@
+"""JSON-RPC 2.0 stdio protocol server for GLM-5.3-Flash agent integration.
+
+Speaks line-delimited JSON-RPC 2.0 over stdio for IDE extensions and
+Dynamic Multi-Harness (DMH) host controllers.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+import time
+import uuid
+from typing import Any, TextIO, cast
+
+from . import __version__
+from .builtin_tools import BuiltinToolsPlugin
+from .config import HarnessConfig, resolve_model_path
+from .context import Context, PluginLoader
+from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
+from .logging import configure_logging, get_logger
+from .loop import AgentLoop
+from .plugins import BasePlugin, SafetyPlugin
+from .sandbox import SandboxPlugin
+from .session import SessionLog
+from .tools import ToolRegistry
+
+_SERVER_CAPABILITIES = {
+    "streaming": True,
+    "replay.from_log": True,
+    "tools.native": True,
+    "tools.code": True,
+    "compaction": False,
+    "approval.ask": True,
+    "subagents.native": False,
+    "plan": False,
+    "goals": False,
+    "mcp.client": False,
+    "prompt.image": False,
+    "fs.world": True,
+    "sandbox.world": True,
+    "runtime.multiSession": True,
+}
+
+
+class ProtocolServer:
+    def __init__(
+        self,
+        config: HarnessConfig,
+        reader: TextIO = sys.stdin,
+        writer: TextIO = sys.stdout,
+    ):
+        self.config = config
+        self.reader = reader
+        self.writer = writer
+        self.running = True
+        self.sessions: dict[str, SessionLog] = {}
+        self.ctx: Context | None = None
+        self.tools: ToolRegistry | None = None
+        self.llm: Any = None
+
+    def _write_frame(self, frame: dict[str, Any]) -> None:
+        raw = json.dumps(frame, ensure_ascii=False)
+        self.writer.write(raw + "\n")
+        self.writer.flush()
+
+    def _success(self, req_id: Any, result: Any) -> None:
+        self._write_frame({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+    def _error(self, req_id: Any, code: int, message: str, data: Any = None) -> None:
+        err: dict[str, Any] = {"code": code, "message": message}
+        if data is not None:
+            err["data"] = data
+        self._write_frame({"jsonrpc": "2.0", "id": req_id, "error": err})
+
+    async def initialize_runtime(self) -> None:
+        resolve_model_path(self.config)
+        self.ctx = Context()
+        initial_log = SessionLog(path=self.config.session_path, corrupt_policy=self.config.corrupt_policy)
+        default_session_id = "default"
+        self.sessions[default_session_id] = initial_log
+
+        self.tools = ToolRegistry(self.ctx, tool_timeout_s=self.config.tool_timeout_s)
+
+        if self.config.mock is not None:
+            self.llm = MockLLM(self.config.mock)
+        elif self.config.api_base is not None:
+            self.llm = OpenAICompatibleGLM(
+                api_base=self.config.api_base,
+                api_key=self.config.api_key,
+                model=self.config.model_name,
+                max_new_tokens=self.config.max_new_tokens,
+                timeout_s=self.config.request_timeout_s,
+            )
+        else:
+            assert self.config.model_path is not None
+            self.llm = TransformersGLM(
+                self.config.model_path,
+                reasoning_effort=self.config.reasoning_effort,
+                max_new_tokens=self.config.max_new_tokens,
+            )
+
+        loader = PluginLoader(self.ctx)
+        await loader.mount(
+            [
+                BasePlugin(initial_log, self.tools),
+                BuiltinToolsPlugin(self.config.workspace_dir),
+                SandboxPlugin(mode=self.config.sandbox_mode),  # type: ignore[arg-type]
+                SafetyPlugin(self.config.tool_allowlist),
+            ]
+        )
+
+    async def handle_request(self, frame: dict[str, Any]) -> None:
+        req_id: object = frame.get("id")
+        method = frame.get("method")
+        params_raw: object = frame.get("params")
+        params: dict[str, Any] = cast(dict[str, Any], params_raw) if isinstance(params_raw, dict) else {}
+
+        if not isinstance(method, str):
+            self._error(req_id, -32600, "Invalid Request: method must be string")
+            return
+
+        if method == "initialize":
+            self._success(
+                req_id,
+                {
+                    "abiVersion": 2,
+                    "runtimeInfo": {
+                        "name": "glm-5.3-flash",
+                        "version": __version__,
+                        "vendor": "zhipu",
+                        "protocol": "glm-jsonrpc-stdio",
+                    },
+                    "runtimeCapabilities": dict(_SERVER_CAPABILITIES),
+                    "authMethods": [],
+                },
+            )
+            return
+
+        if method == "ping":
+            self._success(req_id, {"ok": True, "timestamp": time.time()})
+            return
+
+        if method == "session/list":
+            self._success(req_id, list(self.sessions.keys()))
+            return
+
+        if method == "session/new":
+            new_id = str(params.get("sessionId") or f"session-{uuid.uuid4().hex[:8]}")
+            self.sessions[new_id] = SessionLog()
+            self._success(req_id, {"sessionId": new_id})
+            return
+
+        if method == "tools/list":
+            assert self.tools is not None
+            self._success(req_id, self.tools.schemas())
+            return
+
+        if method == "tools/execute":
+            assert self.tools is not None
+            name = str(params.get("name", ""))
+            args = cast(dict[str, Any], params.get("arguments") or {})
+            res = await self.tools.execute(name, args)
+            self._success(req_id, res)
+            return
+
+        if method == "agent/send":
+            session_id = str(params.get("sessionId", "default"))
+            text = str(params.get("text", ""))
+            if not text:
+                self._error(req_id, -32602, "Invalid params: 'text' is required")
+                return
+
+            session_log = self.sessions.get(session_id)
+            if session_log is None:
+                session_log = SessionLog()
+                self.sessions[session_id] = session_log
+
+            assert self.ctx is not None
+            assert self.tools is not None
+            self.ctx.services["sessions"] = session_log
+
+            agent = AgentLoop(
+                self.ctx,
+                self.llm,
+                session_log,
+                self.tools,
+                max_rounds=self.config.max_rounds,
+                request_timeout_s=self.config.request_timeout_s,
+                max_retries=self.config.max_retries,
+                retry_base_delay_s=self.config.retry_base_delay_s,
+                retry_max_delay_s=self.config.retry_max_delay_s,
+                retry_jitter=self.config.retry_jitter,
+            )
+
+            try:
+                answer = await agent.run(text)
+                self._success(
+                    req_id,
+                    {
+                        "ok": True,
+                        "answer": answer,
+                        "sessionId": session_id,
+                        "eventCount": len(session_log.events),
+                    },
+                )
+            except Exception as exc:
+                self._error(
+                    req_id,
+                    -32603,
+                    f"Agent execution failed: {type(exc).__name__}: {exc}",
+                    data={"sessionId": session_id},
+                )
+            return
+
+        if method == "shutdown":
+            self.running = False
+            self._success(req_id, {"ok": True})
+            return
+
+        self._error(req_id, -32601, f"Method not found: {method}")
+
+    async def serve(self) -> int:
+        await self.initialize_runtime()
+        logger = get_logger()
+        logger.info("protocol server ready")
+
+        loop = asyncio.get_running_loop()
+
+        while self.running:
+            # Read line asynchronously in thread
+            line = await loop.run_in_executor(None, self.reader.readline)
+            if not line:
+                break
+            line_str = line.strip()
+            if not line_str:
+                continue
+            try:
+                raw_json: object = json.loads(line_str)
+            except json.JSONDecodeError as exc:
+                self._error(None, -32700, f"Parse error: {exc}")
+                continue
+
+            if not isinstance(raw_json, dict):
+                self._error(None, -32600, "Invalid Request: must be JSON object")
+                continue
+
+            frame_dict = cast(dict[str, Any], raw_json)
+            req_id: object = frame_dict.get("id")
+            if frame_dict.get("jsonrpc") != "2.0":
+                self._error(req_id, -32600, "Invalid Request: must be JSON-RPC 2.0 object")
+                continue
+
+            await self.handle_request(frame_dict)
+
+        if self.ctx is not None:
+            await self.ctx.close()
+        return 0
+
+
+async def run_server(config: HarnessConfig) -> int:
+    configure_logging(fmt=config.log_format, level=config.log_level)
+    server = ProtocolServer(config)
+    return await server.serve()

@@ -37,7 +37,9 @@ from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
+from .repl import run_repl
 from .sandbox import SandboxPlugin
+from .server import run_server
 from .session import SessionLog
 from .tools import ToolRegistry
 
@@ -125,6 +127,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--doctor",
         action="store_true",
         help="validate config, snapshot, and optional inference extra; do not run a turn",
+    )
+    parser.add_argument(
+        "--repl",
+        action="store_true",
+        help="start interactive terminal REPL session",
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="start JSON-RPC 2.0 stdio protocol server",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -343,6 +355,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = _merge_config(args)
         if args.doctor:
             return doctor(config)
+        if args.serve:
+            return asyncio.run(run_server(config))
+        if args.repl or (not args.prompt and sys.stdin.isatty()):
+            return asyncio.run(run_repl(config))
         return asyncio.run(run(config))
     except ConfigError as exc:
         sys.stderr.write(f"config error: {exc}\n")

@@ -24,6 +24,12 @@ glm-harness --api-base http://127.0.0.1:8000/v1 'Explain this repository'
 # Deterministic mock (no model weights, no GPU required)
 glm-harness --mock 'hello from the mock adapter' 'say hello'
 
+# Interactive multi-turn REPL
+glm-harness --repl --api-base http://127.0.0.1:8000/v1
+
+# Stdio JSON-RPC 2.0 protocol server (for DMH & IDE host integration)
+glm-harness --serve
+
 # Live local snapshot — cwd is used when it contains config.json +
 # tokenizer_config.json; override with GLMH_MODEL_PATH or --model-path.
 glm-harness 'Explain this repository'

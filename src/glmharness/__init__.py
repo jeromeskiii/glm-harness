@@ -10,6 +10,8 @@ the kernel.
 
 from __future__ import annotations
 
+__version__ = "0.3.2"
+
 from .builtin_tools import BuiltinToolsPlugin, resolve_safe_path
 from .bus import EventBus
 from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
@@ -26,11 +28,11 @@ from .errors import (
 from .llm import LLM, MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
+from .repl import run_repl
 from .sandbox import SandboxMode, SandboxPlugin
+from .server import ProtocolServer, run_server
 from .session import SessionEvent, SessionLog
 from .tools import Tool, ToolRegistry, parse_tool_calls, validate_tool_arguments
-
-__version__ = "0.3.2"
 
 __all__ = [
     "LLM",
@@ -46,6 +48,7 @@ __all__ = [
     "OpenAICompatibleGLM",
     "Plugin",
     "PluginLoader",
+    "ProtocolServer",
     "ProviderError",
     "ProviderTimeout",
     "ProviderUnavailable",
@@ -64,5 +67,7 @@ __all__ = [
     "parse_tool_calls",
     "resolve_model_path",
     "resolve_safe_path",
+    "run_repl",
+    "run_server",
     "validate_tool_arguments",
 ]

@@ -25,5 +25,7 @@ htmlcov/
 
 # OS
 .DS_Store
+Icon?
+Icon*
 
 # Model artifacts stay tracked via Git LFS (do not ignore *.safetensors)

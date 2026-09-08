@@ -33,6 +33,21 @@ from .repl import run_repl
 from .sandbox import SandboxMode, SandboxPlugin
 from .server import ProtocolServer, run_server
 from .session import SessionEvent, SessionLog
+from .skills import (
+    RiskLevel,
+    Skill,
+    SkillCatalog,
+    SkillsPlugin,
+    default_skills,
+    import_skills_from_dir,
+)
+from .stop_slop import (
+    StopSlopEngine,
+    make_stop_slop_analyze_tool,
+    make_stop_slop_examples_tool,
+    make_stop_slop_rewrite_tool,
+    make_stop_slop_rules_tool,
+)
 from .tools import Tool, ToolRegistry, parse_tool_calls, validate_tool_arguments
 
 __all__ = [
@@ -54,19 +69,30 @@ __all__ = [
     "ProviderError",
     "ProviderTimeout",
     "ProviderUnavailable",
+    "RiskLevel",
     "SafetyPlugin",
     "SandboxMode",
     "SandboxPlugin",
     "SessionCorruptError",
     "SessionEvent",
     "SessionLog",
+    "Skill",
+    "SkillCatalog",
+    "SkillsPlugin",
+    "StopSlopEngine",
     "Tool",
     "ToolError",
     "ToolRegistry",
     "TransformersGLM",
     "__version__",
     "compact_session",
+    "default_skills",
+    "import_skills_from_dir",
     "looks_like_snapshot",
+    "make_stop_slop_analyze_tool",
+    "make_stop_slop_examples_tool",
+    "make_stop_slop_rewrite_tool",
+    "make_stop_slop_rules_tool",
     "parse_tool_calls",
     "resolve_model_path",
     "resolve_safe_path",

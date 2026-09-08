@@ -69,7 +69,7 @@ async def test_server_sessions_and_tools(tmp_path: Path) -> None:
         {"jsonrpc": "2.0", "id": 7, "method": "shutdown", "params": {}},
     ]
     reader, writer = _make_server_io(reqs)
-    config = HarnessConfig(mock="ok", workspace_dir=tmp_path)
+    config = HarnessConfig(mock="ok", workspace_dir=tmp_path, sandbox_mode="allow")
     server = ProtocolServer(config, reader=reader, writer=writer)
     await server.serve()
 

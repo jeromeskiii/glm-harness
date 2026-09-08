@@ -48,6 +48,9 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "COMPACTION_STRATEGY": ("compaction_strategy", "str", ("summarize", "truncate")),
     "REPLAY_LOG": ("replay_log", "path", None),
     "PROJECTION": ("projection", "str", None),
+    "SKILLS_DIR": ("skills_dir", "path", None),
+    "SKILL_GATE_TOOLS": ("skill_gate_tools", "bool", None),
+    "TASK_RISK": ("task_risk", "str", ("low", "medium", "high", "critical")),
 }
 
 
@@ -90,7 +93,8 @@ class HarnessConfig:
 
     # sandbox & workspace
     workspace_dir: Path | None = None
-    sandbox_mode: str = "allow"
+    # Mutating tools are denied unless the operator explicitly opts in.
+    sandbox_mode: str = "deny"
 
     # compaction & replay
     compaction_threshold: int = 0
@@ -98,6 +102,11 @@ class HarnessConfig:
     compaction_strategy: str = "summarize"
     replay_log: Path | None = None
     projection: str | None = None
+
+    # skills & dynamic triggers
+    skills_dir: Path | None = None
+    skill_gate_tools: bool = False
+    task_risk: str = "low"
 
     # runtime (not from env)
     prompt: str = ""
@@ -119,13 +128,21 @@ class HarnessConfig:
                 continue
             try:
                 if kind == "int":
-                    value: int | float | Path | str | tuple[str, ...] = int(raw)
+                    value: int | float | Path | str | tuple[str, ...] | bool = int(raw)
                 elif kind == "float":
                     value = float(raw)
                 elif kind == "path":
                     value = Path(raw)
                 elif kind == "csv":
                     value = tuple(part.strip() for part in raw.split(",") if part.strip())
+                elif kind == "bool":
+                    normalized = raw.strip().lower()
+                    if normalized in ("1", "true", "yes", "on"):
+                        value = True
+                    elif normalized in ("0", "false", "no", "off"):
+                        value = False
+                    else:
+                        raise ConfigError(f"{_ENV_PREFIX}{name} must be bool: {raw!r}")
                 else:
                     value = raw
             except ValueError as exc:
@@ -170,6 +187,10 @@ class HarnessConfig:
             raise ConfigError(f"sandbox_mode must be allow|deny|ask: {self.sandbox_mode!r}")
         if self.workspace_dir is not None and not self.workspace_dir.is_dir():
             raise ConfigError(f"workspace path is not a directory: {self.workspace_dir}")
+        if self.task_risk not in ("low", "medium", "high", "critical"):
+            raise ConfigError(f"task_risk must be low|medium|high|critical: {self.task_risk!r}")
+        if self.skills_dir is not None and not self.skills_dir.is_dir():
+            raise ConfigError(f"skills path is not a directory: {self.skills_dir}")
 
     def retry_delay(self, attempt: int) -> float:
         """Exponential backoff with jitter for the given 1-based attempt."""

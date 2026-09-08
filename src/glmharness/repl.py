@@ -16,13 +16,18 @@ from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
 from .sandbox import SandboxPlugin
 from .session import SessionLog
+from .skills import RiskLevel, SkillCatalog, SkillsPlugin
+from .stop_slop import StopSlopEngine
 from .tools import ToolRegistry
 
 _HELP_TEXT = """Available commands:
-  /help       - Show this help message
-  /tools      - List registered tools and descriptions
-  /clear      - Reset current conversation history
-  /session    - Show session metrics and persistence path
+  /help        - Show this help message
+  /tools       - List registered tools and descriptions
+  /skills      - List registered skills and triggers
+  /slop <text> - Analyze text for AI patterns and score it
+  /deslop <text> - Rewrite text to eliminate slop
+  /clear       - Reset current conversation history
+  /session     - Show session metrics and persistence path
   /exit, /quit - Terminate the REPL session
 """
 
@@ -88,6 +93,11 @@ async def run_repl(
                 keep_rounds=config.compaction_keep_rounds,
                 strategy=config.compaction_strategy,
             ),
+            SkillsPlugin(
+                skills_dir=config.skills_dir,
+                gate_tools=config.skill_gate_tools,
+                default_risk=RiskLevel.from_str(config.task_risk),
+            ),
         ]
     )
 
@@ -139,12 +149,47 @@ async def run_repl(
                     path_str = str(config.session_path) if config.session_path else "in-memory"
                     output_func(f"Session path: {path_str} | Events recorded: {len(sessions.events)}\n\n")
                     continue
+                if cmd == "/skills":
+                    catalog = cast(SkillCatalog, ctx.get("skills"))
+                    skills_list = catalog.all_skills()
+                    output_func(f"Registered skills ({len(skills_list)}):\n")
+                    for sk in skills_list:
+                        trigs = ", ".join(sorted(sk.triggers)) if sk.triggers else "(always)"
+                        t_str = ", ".join(sorted(sk.tools)) if sk.tools else "none"
+                        output_func(f"  - {sk.name}: triggers=[{trigs}], tools=[{t_str}]\n")
+                    g_status = "enabled" if catalog.gate_tools else "disabled"
+                    output_func(f"Tool gating: {g_status}\n\n")
+                    continue
                 if cmd == "/tools":
                     schemas = tools.schemas()
                     output_func(f"Registered tools ({len(schemas)}):\n")
                     for s in schemas:
                         fn = s.get("function", {})
                         output_func(f"  - {fn.get('name')}: {fn.get('description')}\n")
+                    output_func("\n")
+                    continue
+                if cmd.startswith("/slop "):
+                    text_to_analyze = line[6:].strip()
+                    engine = StopSlopEngine()
+                    res = engine.analyze(text_to_analyze)
+                    output_func(f"{res['summary']}\n")
+                    if res["violations"]:
+                        output_func("Violations:\n")
+                        for v in res["violations"]:
+                            cat = v["category"]
+                            ln = v["line"]
+                            ph = v["phrase"]
+                            sug = v["suggestion"]
+                            output_func(f"  - [{cat}] line {ln}: {ph} -> {sug}\n")
+                    output_func("\n")
+                    continue
+                if cmd.startswith("/deslop "):
+                    text_to_clean = line[8:].strip()
+                    engine = StopSlopEngine()
+                    res = engine.rewrite(text_to_clean)
+                    output_func(f"Rewritten:\n{res['rewritten']}\n\nChanges ({res['changes_count']}):\n")
+                    for c in res["changes"]:
+                        output_func(f"  - {c}\n")
                     output_func("\n")
                     continue
                 output_func(f"Unknown command: {line}. Type /help for assistance.\n\n")

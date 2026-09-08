@@ -11,6 +11,7 @@ import json
 import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Any, TextIO, cast
 
 from . import __version__
@@ -24,6 +25,7 @@ from .loop import AgentLoop
 from .plugins import BasePlugin, SafetyPlugin
 from .sandbox import SandboxPlugin
 from .session import SessionLog
+from .skills import RiskLevel, SkillCatalog, SkillsPlugin
 from .tools import ToolRegistry
 
 _SERVER_CAPABILITIES = {
@@ -33,6 +35,7 @@ _SERVER_CAPABILITIES = {
     "tools.code": True,
     "compaction": True,
     "approval.ask": True,
+    "skills": True,
     "subagents.native": False,
     "plan": False,
     "goals": False,
@@ -112,6 +115,11 @@ class ProtocolServer:
                     threshold=self.config.compaction_threshold,
                     keep_rounds=self.config.compaction_keep_rounds,
                     strategy=self.config.compaction_strategy,
+                ),
+                SkillsPlugin(
+                    skills_dir=self.config.skills_dir,
+                    gate_tools=self.config.skill_gate_tools,
+                    default_risk=RiskLevel.from_str(self.config.task_risk),
                 ),
             ]
         )
@@ -259,6 +267,71 @@ class ProtocolServer:
                     f"Agent execution failed: {type(exc).__name__}: {exc}",
                     data={"sessionId": session_id},
                 )
+            return
+
+        if method == "skills/list":
+            if self.ctx is None or "skills" not in self.ctx.services:
+                self._error(req_id, -32603, "Skills subsystem not initialized")
+                return
+            catalog = cast(SkillCatalog, self.ctx.get("skills"))
+            skills_data = [
+                {
+                    "name": s.name,
+                    "description": s.description,
+                    "triggers": sorted(s.triggers),
+                    "tools": sorted(s.tools),
+                    "capabilities": sorted(s.capabilities),
+                    "tags": sorted(s.tags),
+                    "always": s.always,
+                    "min_risk": s.min_risk.name,
+                    "max_risk": s.max_risk.name,
+                }
+                for s in catalog.all_skills()
+            ]
+            self._success(req_id, {"skills": skills_data, "gateTools": catalog.gate_tools})
+            return
+
+        if method == "skills/match":
+            if self.ctx is None or "skills" not in self.ctx.services:
+                self._error(req_id, -32603, "Skills subsystem not initialized")
+                return
+            objective = str(params.get("objective", ""))
+            risk_str = str(params.get("risk", self.config.task_risk))
+            risk_val = RiskLevel.from_str(risk_str)
+            caps_raw = params.get("capabilities", [])
+            caps = (
+                frozenset(str(c) for c in cast(list[object], caps_raw) if c)
+                if isinstance(caps_raw, list)
+                else frozenset[str]()
+            )
+            catalog = cast(SkillCatalog, self.ctx.get("skills"))
+            matches = catalog.match(objective=objective, capabilities=caps, risk=risk_val)
+            res = [
+                {
+                    "name": s.name,
+                    "score": score,
+                    "tools": sorted(s.tools),
+                    "triggers": sorted(s.triggers),
+                }
+                for s, score in matches
+            ]
+            self._success(req_id, {"matches": res})
+            return
+
+        if method == "skills/import":
+            if self.ctx is None or "skills" not in self.ctx.services:
+                self._error(req_id, -32603, "Skills subsystem not initialized")
+                return
+            dir_str = str(params.get("dir", ""))
+            target_dir = Path(dir_str)
+            loop = asyncio.get_running_loop()
+            is_dir = await loop.run_in_executor(None, target_dir.is_dir)
+            if not is_dir:
+                self._error(req_id, -32602, f"Invalid params: directory not found: {dir_str}")
+                return
+            catalog = cast(SkillCatalog, self.ctx.get("skills"))
+            count = await loop.run_in_executor(None, catalog.import_from_dir, target_dir)
+            self._success(req_id, {"imported": count, "total": len(catalog.all_skills())})
             return
 
         if method == "shutdown":

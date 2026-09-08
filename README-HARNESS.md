@@ -39,6 +39,12 @@ glm-harness --doctor
 
 # Persist the conversation for replay / debugging
 glm-harness --session .sessions/demo.jsonl 'Plan a release'
+
+# Stop-Slop: Prose quality analysis & deterministic de-slopping
+glm-harness --slop-analyze "Here's the thing: we must navigate the fast-paced landscape."
+glm-harness --slop-rewrite "Here's the thing: we must navigate uncertainty. Let that sink in."
+glm-harness --slop-rules scoring
+glm-harness --slop-examples
 ```
 
 The CLI composes with pipes: the final answer is on stdout, every
@@ -70,12 +76,15 @@ set of recognized envs with their defaults:
 | `GLMH_LOG_LEVEL` | `INFO` | standard logging levels |
 | `GLMH_CORRUPT_POLICY` | `skip` | `skip` / `rename` / `fail` on bad session JSONL |
 | `GLMH_WORKSPACE` | cwd | workspace root directory for tools (`--workspace`) |
-| `GLMH_SANDBOX` | `allow` | sandbox policy (`allow`, `deny`, `ask`) |
+| `GLMH_SANDBOX` | `deny` | sandbox policy (`allow`, `deny`, `ask`); mutating tools require explicit opt-in |
 | `GLMH_COMPACTION_THRESHOLD` | `0` | token or turn threshold for automated history compaction (`--compaction-threshold`) |
 | `GLMH_COMPACTION_KEEP_ROUNDS` | `4` | recent interaction turns to keep uncompacted (`--compaction-keep-rounds`) |
 | `GLMH_COMPACTION_STRATEGY` | `summarize` | `summarize` or `truncate` (`--compaction-strategy`) |
 | `GLMH_REPLAY_LOG` | — | JSONL session log to replay / reconstruct history from (`--replay-log`) |
 | `GLMH_PROJECTION` | — | JSON array of prior messages to replay from (`--projection`) |
+| `GLMH_SKILLS_DIR` | — | directory tree containing external `SKILL.md` bundles (`--skills-dir`) |
+| `GLMH_SKILL_GATE_TOOLS` | `false` | enable skill-managed tool gating (`--skill-gate-tools`) |
+| `GLMH_TASK_RISK` | `low` | task risk boundary used for skill activation (`--task-risk`) |
 
 Unknown `GLMH_*` variables are logged and ignored — typos won't crash the
 harness.
@@ -89,6 +98,18 @@ harness.
 | 3 | provider failure (including a spent request timeout) |
 | 4 | tool/pipeline failure |
 | 130 | cancelled (SIGINT/SIGTERM) |
+
+## Stop-Slop Prose Quality Engine
+
+The harness bundles an embedded, zero-dependency prose quality engine based on the `stop-slop` skill. It eliminates predictable AI tells, throat-clearing, emphasis crutches, business jargon, and adverbs.
+
+### Features
+
+- **5-Dimensional Scoring**: Evaluates prose across Directness, Rhythm, Trust, Authenticity, and Density (1–10 each, total /50; threshold <35 indicates revision needed).
+- **Deterministic Rewriter**: Automatically strips throat-clearing openers, emphasis crutches ("Let that sink in.", "Full stop."), replaces corporate jargon with plain English, and cleans em dashes.
+- **Dynamic Skill Integration**: When prompt topics mention `prose`, `writing`, `slop`, `draft`, `jargon`, or `buzzwords`, the `stop-slop` skill automatically activates, injecting quality guidance and unlocking model tools.
+- **Model Tools**: `stop_slop_analyze`, `stop_slop_rewrite`, `stop_slop_rules`, and `stop_slop_examples`.
+- **REPL Commands**: `/slop <text>` for instant dimensional audits, and `/deslop <text>` for instant rewrites.
 
 ## Develop
 
@@ -104,7 +125,8 @@ This is a one-shot local runner. The kernel stays minimal on purpose:
 
 - **OS sandbox** is not in the kernel. `SafetyPlugin` is the production
   allowlist gate on `tools/pre-execute`; add an approval plugin the same way.
-- **Network protocol** is out of scope; this CLI is the only entry point.
+- **Network protocol** is not exposed by the harness; the stdio JSON-RPC carrier
+  is intended for a local host such as an IDE or DMH controller.
 - **Streaming backpressure** is bounded only by the consumer's iterator;
   a hosting carrier would add explicit flow control.
 - **Multi-image / video** inputs require the multimodal chat template;
@@ -112,3 +134,21 @@ This is a one-shot local runner. The kernel stays minimal on purpose:
 
 Tool outcomes are appended as `tool/result` facts; failed or cancelled
 provider calls close their turn with a durable status marker.
+
+### Production safety baseline
+
+The default sandbox policy is `deny`. To permit mutating tools, choose an
+explicit policy for the deployment:
+
+```bash
+# Interactive operator approval for each mutating action
+GLMH_SANDBOX=ask glm-harness --mock 'ok' 'inspect the workspace'
+
+# Explicit unattended opt-in (use only with a dedicated workspace)
+GLMH_SANDBOX=allow glm-harness --workspace /srv/glm-work 'run the task'
+```
+
+Keep the workspace dedicated to the harness. The built-in `bash` tool runs a
+shell in that directory but is not an OS-level sandbox; use a container or
+other OS isolation when commands must be confined against a malicious model
+or untrusted prompt.

@@ -15,6 +15,7 @@ def test_defaults_validate() -> None:
     config.validate()
     assert config.request_timeout_s == 300.0
     assert config.tool_timeout_s == 30.0
+    assert config.sandbox_mode == "deny"
 
 
 def test_reasoning_effort_must_be_low_high_max() -> None:
@@ -81,6 +82,19 @@ def test_from_env_rejects_bad_values(monkeypatch) -> None:
     monkeypatch.setenv("GLMH_MAX_ROUNDS", "not-a-number")
     with pytest.raises(ConfigError):
         HarnessConfig.from_env()
+
+
+def test_from_env_rejects_invalid_boolean(monkeypatch) -> None:
+    monkeypatch.setenv("GLMH_SKILL_GATE_TOOLS", "definitely")
+    with pytest.raises(ConfigError, match="GLMH_SKILL_GATE_TOOLS must be bool"):
+        HarnessConfig.from_env()
+
+
+def test_from_env_accepts_boolean_spellings(monkeypatch) -> None:
+    monkeypatch.setenv("GLMH_SKILL_GATE_TOOLS", " YES ")
+    assert HarnessConfig.from_env().skill_gate_tools is True
+    monkeypatch.setenv("GLMH_SKILL_GATE_TOOLS", "off")
+    assert HarnessConfig.from_env().skill_gate_tools is False
 
 
 def test_from_env_unknown_keys_collected(monkeypatch) -> None:

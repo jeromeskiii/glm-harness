@@ -44,6 +44,8 @@ from .repl import run_repl
 from .sandbox import SandboxPlugin
 from .server import run_server
 from .session import SessionLog
+from .skills import RiskLevel, SkillsPlugin
+from .stop_slop import StopSlopEngine
 from .tools import ToolRegistry
 
 
@@ -109,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sandbox",
         choices=("allow", "deny", "ask"),
         default=None,
-        help="sandbox policy for mutating tools (allow, deny, ask; default: allow)",
+        help="sandbox policy for mutating tools (allow, deny, ask; default: deny)",
     )
     parser.add_argument(
         "--api-base",
@@ -170,6 +172,48 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSON array of messages [{'role': ..., 'content': ...}] to replay from",
     )
+    parser.add_argument(
+        "--skills-dir",
+        type=Path,
+        default=None,
+        help="path to directory containing external SKILL.md bundles",
+    )
+    parser.add_argument(
+        "--skill-gate-tools",
+        action="store_true",
+        default=None,
+        help="restrict tool execution to tools unlocked by actively triggered skills",
+    )
+    parser.add_argument(
+        "--task-risk",
+        choices=("low", "medium", "high", "critical"),
+        default=None,
+        help="risk boundary for task execution (default: low)",
+    )
+    parser.add_argument(
+        "--slop-analyze",
+        type=str,
+        default=None,
+        help="analyze input prose for AI patterns and output dimensional scores",
+    )
+    parser.add_argument(
+        "--slop-rewrite",
+        type=str,
+        default=None,
+        help="rewrite input prose to eliminate AI patterns, throat-clearing, and jargon",
+    )
+    parser.add_argument(
+        "--slop-rules",
+        nargs="?",
+        const="all",
+        default=None,
+        help="display stop-slop rules, optionally filtered by category",
+    )
+    parser.add_argument(
+        "--slop-examples",
+        action="store_true",
+        help="display stop-slop canonical before/after transformations",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -197,6 +241,9 @@ _CLI_FIELD_FOR = {
     "compaction_strategy": "compaction_strategy",
     "replay_log": "replay_log",
     "projection": "projection",
+    "skills_dir": "skills_dir",
+    "skill_gate_tools": "skill_gate_tools",
+    "task_risk": "task_risk",
 }
 
 
@@ -297,6 +344,11 @@ async def run(config: HarnessConfig) -> int:
                     threshold=config.compaction_threshold,
                     keep_rounds=config.compaction_keep_rounds,
                     strategy=config.compaction_strategy,
+                ),
+                SkillsPlugin(
+                    skills_dir=config.skills_dir,
+                    gate_tools=config.skill_gate_tools,
+                    default_risk=RiskLevel.from_str(config.task_risk),
                 ),
             ]
         )
@@ -403,6 +455,28 @@ def doctor(config: HarnessConfig) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.slop_analyze is not None:
+            engine = StopSlopEngine()
+            report = engine.analyze(args.slop_analyze)
+            sys.stdout.write(json.dumps(report, indent=2) + "\n")
+            return 0 if report["passes_threshold"] else 1
+        if args.slop_rewrite is not None:
+            engine = StopSlopEngine()
+            res = engine.rewrite(args.slop_rewrite)
+            sys.stdout.write(res["rewritten"] + "\n")
+            return 0
+        if args.slop_rules is not None:
+            engine = StopSlopEngine()
+            cat = None if args.slop_rules == "all" else args.slop_rules
+            rules = engine.get_rules(cat)
+            sys.stdout.write(json.dumps(rules, indent=2) + "\n")
+            return 0
+        if args.slop_examples:
+            engine = StopSlopEngine()
+            examples = engine.get_examples()
+            sys.stdout.write(json.dumps(examples, indent=2) + "\n")
+            return 0
+
         config = _merge_config(args)
         if args.doctor:
             return doctor(config)

@@ -81,6 +81,22 @@ async def test_openai_glm_streams_text() -> None:
     assert "".join(chunks) == "Hello world"
 
 
+async def test_openai_glm_zero_timeout_uses_unset_socket_timeout() -> None:
+    from glmharness import OpenAICompatibleGLM
+
+    observed: list[object] = []
+
+    def fake_opener(req, timeout):
+        observed.append(timeout)
+        return _MockResponse(["data: [DONE]\n"])
+
+    adapter = OpenAICompatibleGLM(opener=fake_opener, timeout_s=0)
+    async for _ in adapter.stream([{"role": "user", "content": "hi"}]):
+        pass
+
+    assert observed == [None]
+
+
 async def test_openai_glm_streams_and_formats_tool_calls() -> None:
     from glmharness import OpenAICompatibleGLM, parse_tool_calls
 

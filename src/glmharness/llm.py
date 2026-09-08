@@ -128,7 +128,11 @@ class OpenAICompatibleGLM:
             )
             accumulated_tools: dict[int, dict[str, Any]] = {}
             try:
-                with self._opener(req, timeout=self.timeout_s) as resp:
+                # ``0`` disables the application-level request deadline. The
+                # urllib contract uses ``None`` for an unset socket timeout;
+                # passing 0 raises ValueError instead of disabling it.
+                open_timeout = self.timeout_s if self.timeout_s > 0 else None
+                with self._opener(req, timeout=open_timeout) as resp:
                     for raw_line in resp:
                         raw_str = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else str(raw_line)
                         line = raw_str.strip()

@@ -122,6 +122,9 @@ async def test_bash_tool_execution(tmp_path: Path) -> None:
     assert res_timeout["timed_out"] is True
     assert res_timeout["exit_code"] == -1
 
+    with pytest.raises(ValueError, match="timeout_s must be >= 0"):
+        await ToolRegistry._invoke(tool, {"command": "echo should-not-run", "timeout_s": -1})
+
 
 def test_builtin_tools_plugin(tmp_path: Path) -> None:
     ctx = Context()

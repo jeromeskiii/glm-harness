@@ -95,3 +95,51 @@ Extend `glmharness` beyond one-shot CLI execution by providing:
   - Sets `GLM_CAPABILITIES["replay.from_log"] = True` and `GLM_CAPABILITIES["compaction"] = True`.
   - Replays prior projection history into session before turn execution, supporting seamless runtime switching.
 
+---
+
+## Phase 5: Dynamic Skill Trigger & Tool Gating System
+
+### Goal
+Provide a deterministic, high-safety skill trigger and tool-gating subsystem inspired by SGAA:
+1. **Deterministic 3-Tier Trigger Matching**: Alphanumeric token boundaries, morphological stemming (doubled consonants, silent `-e`, `-ies`), irregular verb groups (`run/ran`, `write/wrote`), and phrase boundary regex.
+2. **Multi-Signal Activation Scoring & Risk Gating**: Mathematical scoring across `always`, explicit metadata, capability overlap, trigger ramps ($\min(1.0, 0.45 + 0.20 \times |hits|)$), and tags, bounded by `[min_risk, max_risk]`.
+3. **Safe Tool Gating**: Effective allowed tools computed as $(T_{\text{all}} \setminus T_{\text{managed}}) \cup T_{\text{active}}$. Unmatched skill tools are locked out from both LLM schemas and execution interception.
+4. **Dynamic `SKILL.md` Ingestion**: Recursive discovery of external Agent Skills with YAML frontmatter parsing and heuristic trigger auto-extraction.
+5. **Plugin & Carrier Integration**: `SkillsPlugin` mounted across CLI, REPL, and Stdio Server (`skills/list`, `skills/match`, `skills/import`).
+
+---
+
+## Phase 6: Stop-Slop Prose Quality Engine & Tool Integration
+
+### Goal
+Install and wire the `stop-slop` agent skill from `/Users/ohmskiii/Desktop/stop-slop` into `/Users/ohmskiii/GLM-5.3-Flash-H`, providing deterministic prose pattern analysis, dimensional scoring, and automatic de-slopping.
+
+### Architecture & Components
+
+#### 1. Installed Skill Bundle (`skills/stop-slop/`)
+- Ingested `SKILL.md` with complete YAML frontmatter (tools, triggers, tags, category).
+- Ingested reference corpus: `references/phrases.md`, `references/structures.md`, and `references/examples.md`.
+
+#### 2. Stop-Slop Engine & Toolset (`src/glmharness/stop_slop.py`)
+- `StopSlopEngine`:
+  - `analyze(text: str) -> dict[str, Any]`: Evaluates prose across 5 dimensions: Directness, Rhythm, Trust, Authenticity, and Density (1–10 each, total /50; threshold <35). Identifies throat-clearing, emphasis crutches, corporate jargon, adverbs/fillers, binary contrasts, meta-commentary, vague declaratives, and em-dashes.
+  - `rewrite(text: str) -> dict[str, Any]`: Deterministic cleanup replacing jargon with plain English, removing openers and crutches, and normalizing punctuation.
+  - `get_rules(category: str | None) -> dict[str, Any]`: Structured style guide rules.
+  - `get_examples() -> list[dict[str, str]]`: 5 canonical before/after transformations.
+- Tool Factories:
+  - `make_stop_slop_analyze_tool()`
+  - `make_stop_slop_rewrite_tool()`
+  - `make_stop_slop_rules_tool()`
+  - `make_stop_slop_examples_tool()`
+
+#### 3. Builtin Tools & Skills Integration
+- `BuiltinToolsPlugin`: Automatically mounts all 4 stop-slop tools into `ToolRegistry`.
+- `default_skills()`: Registers `stop-slop` skill with triggers (`slop`, `de-slop`, `prose`, `writing`, `draft`, `buzzword`, `jargon`, `adverb`).
+- `SkillsPlugin.apply()`: Automatically discovers `skills/` directory when `--skills-dir` is not explicitly provided.
+
+#### 4. Carriers & CLI Controls
+- CLI: `--slop-analyze <text>`, `--slop-rewrite <text>`, `--slop-rules [category]`, `--slop-examples`.
+- REPL: `/slop <text>` and `/deslop <text>` commands.
+
+
+

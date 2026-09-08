@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from .context import Context
+from .stop_slop import (
+    make_stop_slop_analyze_tool,
+    make_stop_slop_examples_tool,
+    make_stop_slop_rewrite_tool,
+    make_stop_slop_rules_tool,
+)
 from .tools import Tool, ToolRegistry
 
 _MAX_OUTPUT_BYTES = 50_000
@@ -194,6 +200,8 @@ def make_bash_tool(workspace: Path) -> Tool:
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
         timeout_s = float(args.get("timeout_s", 30.0))
+        if timeout_s < 0:
+            raise ValueError("timeout_s must be >= 0")
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=cwd_str,
@@ -232,13 +240,19 @@ def make_bash_tool(workspace: Path) -> Tool:
 
 
 class BuiltinToolsPlugin:
-    """Mounts the standard tool battery (read, write, edit, list, bash) into ToolRegistry."""
+    """Mounts the standard tool battery (read, write, edit, list, bash, stop-slop) into ToolRegistry."""
 
     id = "builtin-tools"
 
-    def __init__(self, workspace: Path | None = None, enable_bash: bool = True):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        enable_bash: bool = True,
+        enable_stop_slop: bool = True,
+    ):
         self.workspace = (workspace or Path.cwd()).resolve()
         self.enable_bash = enable_bash
+        self.enable_stop_slop = enable_stop_slop
 
     def apply(self, ctx: Context) -> None:
         ctx.provide("workspace", self.workspace)
@@ -249,3 +263,8 @@ class BuiltinToolsPlugin:
         tools.register(make_list_dir_tool(self.workspace))
         if self.enable_bash:
             tools.register(make_bash_tool(self.workspace))
+        if self.enable_stop_slop:
+            tools.register(make_stop_slop_analyze_tool())
+            tools.register(make_stop_slop_rewrite_tool())
+            tools.register(make_stop_slop_rules_tool())
+            tools.register(make_stop_slop_examples_tool())

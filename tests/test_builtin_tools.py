@@ -59,6 +59,33 @@ async def test_read_file_tool(tmp_path: Path) -> None:
         await ToolRegistry._invoke(tool, {"path": "missing.txt"})
 
 
+async def test_read_file_tool_rejects_oversized_file(tmp_path: Path) -> None:
+    """The byte cap must reject large files before they load into RAM."""
+    from glmharness.builtin_tools import _READ_FILE_MAX_BYTES
+
+    # ``_READ_FILE_MAX_BYTES`` is 10 MiB. Writing that on every CI is slow,
+    # so the cap is verified symbolically and only a 1 MiB file is written
+    # when the constant is large enough to host it.
+    assert _READ_FILE_MAX_BYTES == 10 * 1024 * 1024
+
+    big = tmp_path / "too-big.txt"
+    if _READ_FILE_MAX_BYTES >= 1024 * 1024:
+        big.write_bytes(b"x" * (1024 * 1024))
+        # Shrink the constant locally by monkey-patching the module's symbol,
+        # so the rejection path runs without writing 10 MiB on every test
+        # run. The check still exercises the production code path.
+        import glmharness.builtin_tools as bt
+
+        original = bt._READ_FILE_MAX_BYTES
+        bt._READ_FILE_MAX_BYTES = 1024
+        try:
+            tool = make_read_file_tool(tmp_path)
+            with pytest.raises(ValueError, match="too large"):
+                await ToolRegistry._invoke(tool, {"path": "too-big.txt"})
+        finally:
+            bt._READ_FILE_MAX_BYTES = original
+
+
 async def test_write_file_tool(tmp_path: Path) -> None:
     tool = make_write_file_tool(tmp_path)
     res = await ToolRegistry._invoke(tool, {"path": "nested/dir/output.txt", "content": "world"})

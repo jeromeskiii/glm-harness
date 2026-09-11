@@ -51,6 +51,8 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "SKILLS_DIR": ("skills_dir", "path", None),
     "SKILL_GATE_TOOLS": ("skill_gate_tools", "bool", None),
     "TASK_RISK": ("task_risk", "str", ("low", "medium", "high", "critical")),
+    "EMBED_MODEL_PATH": ("embed_model_path", "path", None),
+    "RPC_TOKEN": ("rpc_token", "str", None),
 }
 
 
@@ -107,6 +109,14 @@ class HarnessConfig:
     skills_dir: Path | None = None
     skill_gate_tools: bool = False
     task_risk: str = "low"
+
+    # embeddings (optional; semantic tools mount only when a model resolves)
+    embed_model_path: Path | None = None
+
+    # stdio JSON-RPC server auth: when set, the ``initialize`` RPC must carry
+    # this bearer token. Stdio is loopback and trusted by default; only set
+    # this when handing the server to a less-trusted peer.
+    rpc_token: str | None = None
 
     # runtime (not from env)
     prompt: str = ""
@@ -191,6 +201,8 @@ class HarnessConfig:
             raise ConfigError(f"task_risk must be low|medium|high|critical: {self.task_risk!r}")
         if self.skills_dir is not None and not self.skills_dir.is_dir():
             raise ConfigError(f"skills path is not a directory: {self.skills_dir}")
+        if self.embed_model_path is not None and not self.embed_model_path.is_dir():
+            raise ConfigError(f"embedding model path is not a directory: {self.embed_model_path}")
 
     def retry_delay(self, attempt: int) -> float:
         """Exponential backoff with jitter for the given 1-based attempt."""
@@ -226,6 +238,25 @@ def resolve_model_path(config: HarnessConfig, *, cwd: Path | None = None) -> Har
         "either --mock, --api-base (GLMH_API_BASE), or a model path (--model-path / GLMH_MODEL_PATH) is "
         "required (cwd is not a GLM snapshot)"
     )
+
+
+def resolve_embed_model_path(config: HarnessConfig, *, cwd: Path | None = None) -> Path | None:
+    """Resolve the embedding model directory, or ``None`` to disable the tools.
+
+    An explicit ``embed_model_path`` (env or flag) wins. When unset, a local
+    ``all-MiniLM-L6-v2`` snapshot in the home directory is picked up as a
+    documented convenience; anything else disables the semantic tool battery.
+    """
+    if config.embed_model_path is not None:
+        return config.embed_model_path
+    home_snapshot = Path.home() / "all-MiniLM-L6-v2"
+    if home_snapshot.is_dir():
+        return home_snapshot
+    here = cwd if cwd is not None else Path.cwd()
+    local_snapshot = here / "all-MiniLM-L6-v2"
+    if local_snapshot.is_dir():
+        return local_snapshot
+    return None
 
 
 def _hash_fraction(seed: int) -> float:

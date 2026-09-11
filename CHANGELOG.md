@@ -3,6 +3,58 @@
 All notable changes to the GLM harness ship in this file. Versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-09
+
+Semantic embedding service wired into the harness.
+
+### Added
+
+- ``EmbeddingProvider``: lazy loader over a local sentence-transformers
+  snapshot (``all-MiniLM-L6-v2``) with a fail-fast snapshot check and an
+  actionable error when the optional ``[embeddings]`` extra is missing.
+- Semantic tool battery mounted by ``EmbeddingsPlugin``: ``embed_text``,
+  ``semantic_similarity``, and ``semantic_rank`` (read-only, cosine-based,
+  normalized vectors).
+- ``GLMH_EMBED_MODEL_PATH`` / ``--embed-model-path`` config; when unset the
+  resolver picks up ``~/all-MiniLM-L6-v2`` or ``./all-MiniLM-L6-v2`` when
+  present, so the tools mount with zero configuration on operator machines.
+- CLI convenience actions ``--embed TEXT`` and ``--similarity A B``, REPL
+  commands ``/embed`` and ``/similar``, and a ``--doctor`` embeddings row
+  that fails when the snapshot or the ``[embeddings]`` extra is missing.
+- JSON-RPC server mounts the plugin and advertises ``embeddings`` in
+  ``runtimeCapabilities`` when the model resolves; the semantic tools are
+  reachable over ``tools/list`` and ``tools/execute``.
+- New ``[embeddings]`` extra (``sentence-transformers>=3.0``).
+- ``cosine_similarity`` helper (numpy-free) and unit tests for the provider,
+  tools, plugin mount, and CLI wiring.
+
+## [0.3.3] - 2026-09-09
+
+Local snapshot loading fixed for the multimodal GLM-5.3-Flash architecture.
+
+### Fixed
+
+- ``TransformersGLM`` loaded the snapshot with ``AutoModelForCausalLM`` /
+  ``AutoTokenizer``, which transformers rejects for ``glm5_next``
+  (``Unrecognized configuration class``). The adapter now loads through the
+  image-text-to-text stack — ``AutoProcessor`` +
+  ``AutoModelForImageTextToText`` — and applies the chat template on the
+  processor.
+- ``turn failed`` logs include the exception type in text mode, so a failed
+  turn is diagnosable without switching to JSON logging.
+
+### Changed
+
+- The ``[inference]`` extra now includes ``accelerate``, ``torchvision`` and
+  ``pillow`` alongside ``torch`` and ``transformers`` so the multimodal
+  processor and ``device_map="auto"`` load out of the box.
+- A config-only snapshot (no ``model-*.safetensors`` shards) fails fast with
+  an actionable ``ConfigError`` (exit 2) pointing at the disk/RAM requirement
+  and the ``--api-base`` alternative, instead of a cryptic loader traceback
+  after retries.
+- ``HarnessError`` messages from a failed turn are logged to stderr before
+  the CLI returns the mapped exit code, so the reason is visible in text mode.
+
 ## [0.3.2] - 2026-09-05
 
 Operator default: request timeout is on.

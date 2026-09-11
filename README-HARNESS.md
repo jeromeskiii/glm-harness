@@ -10,11 +10,14 @@ loop, model adapter) is a replaceable service behind them.
 ```bash
 # Optional local virtualenv
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e ".[inference,dev]"
+pip install -e ".[inference,embeddings,dev]"
 ```
 
-The `inference` extra pulls in `transformers>=5.0` and `torch`. Without it
-the harness falls back to `MockLLM` for offline smoke runs.
+The `inference` extra pulls in `transformers>=5.0`, `torch`, `torchvision`,
+`pillow` and `accelerate` — the stack the multimodal local snapshot path
+needs. Without it the harness falls back to `MockLLM` for offline smoke
+runs. The `embeddings` extra pulls in `sentence-transformers` for the
+semantic tool battery.
 
 ## Run
 
@@ -45,10 +48,59 @@ glm-harness --slop-analyze "Here's the thing: we must navigate the fast-paced la
 glm-harness --slop-rewrite "Here's the thing: we must navigate uncertainty. Let that sink in."
 glm-harness --slop-rules scoring
 glm-harness --slop-examples
+
+# Semantic embeddings: local sentence-transformers snapshot
+glm-harness --embed 'hello world'
+glm-harness --similarity 'machine learning' 'neural networks'
 ```
 
 The CLI composes with pipes: the final answer is on stdout, every
 diagnostic record on stderr.
+
+### Local snapshot requirements
+
+The vendored repo is a **config-only snapshot** — `config.json`,
+`tokenizer_config.json` and the processor files are present, but the
+weights are not. The full GLM-5.3-Flash FP8 checkpoint is ~330 GB on disk
+and dequantizes to ~660 GB in RAM at load, so it needs a GPU/XPU server or
+an operator-class box. On a laptop, run the model through a served
+endpoint instead:
+
+```bash
+# Z.ai API, or any local vLLM / SGLang / Ollama OpenAI-compatible server
+glm-harness --api-base http://127.0.0.1:8000/v1 'Explain this repository'
+```
+
+When weights are missing the harness fails fast (exit 2) with an
+actionable message instead of a cryptic loader traceback. To run the
+snapshot locally, place the `model-*.safetensors` shards next to
+`config.json` (or point `GLMH_MODEL_PATH` at a complete snapshot
+directory).
+
+### Semantic embeddings
+
+The harness can mount a local sentence-transformers snapshot
+(`all-MiniLM-L6-v2`, 384-dim, normalized) behind three read-only model
+tools — `embed_text`, `semantic_similarity`, and `semantic_rank` — plus
+the `--embed` / `--similarity` CLI actions and `/embed` / `/similar`
+REPL commands. The provider loads lazily, so runs that never touch the
+semantic tools pay nothing.
+
+The model resolves from `--embed-model-path` / `GLMH_EMBED_MODEL_PATH`;
+when unset, `~/all-MiniLM-L6-v2` (then `./all-MiniLM-L6-v2`) is picked
+up automatically when present. `glm-harness --doctor` reports the
+resolved path and the sentence-transformers version (and fails when
+either is missing). The stdio JSON-RPC server advertises `embeddings` in
+`runtimeCapabilities` and serves the tools over `tools/list` /
+`tools/execute`.
+
+```bash
+# Embed and print the 384-dim vector
+glm-harness --embed 'hello world'
+
+# Cosine similarity between two texts
+glm-harness --similarity 'machine learning' 'neural networks'
+```
 
 ### Configuration
 
@@ -61,6 +113,7 @@ set of recognized envs with their defaults:
 | `GLMH_API_KEY` | — | optional bearer token (`--api-key`) |
 | `GLMH_MODEL` | `GLM-5.3-Flash` | model identifier for remote endpoint (`--model`) |
 | `GLMH_MODEL_PATH` | cwd if it is a snapshot | path to a GLM-5.3-Flash snapshot |
+| `GLMH_SESSION` | — | path to the append-only JSONL session log (`--session`) |
 | `GLMH_MOCK` | — | if set, use this string as a deterministic response instead of the model |
 | `GLMH_TOOL_ALLOWLIST` | empty (all registered) | comma-separated tool names the model may call |
 | `GLMH_REASONING_EFFORT` | `max` | one of `low`, `high`, `max` |
@@ -85,6 +138,7 @@ set of recognized envs with their defaults:
 | `GLMH_SKILLS_DIR` | — | directory tree containing external `SKILL.md` bundles (`--skills-dir`) |
 | `GLMH_SKILL_GATE_TOOLS` | `false` | enable skill-managed tool gating (`--skill-gate-tools`) |
 | `GLMH_TASK_RISK` | `low` | task risk boundary used for skill activation (`--task-risk`) |
+| `GLMH_EMBED_MODEL_PATH` | `~/all-MiniLM-L6-v2` if present | local sentence-transformers snapshot for semantic tools (`--embed-model-path`) |
 
 Unknown `GLMH_*` variables are logged and ignored — typos won't crash the
 harness.

@@ -33,8 +33,14 @@ from typing import Any, cast
 from . import __version__
 from .builtin_tools import BuiltinToolsPlugin
 from .compaction import CompactionPlugin
-from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
+from .config import (
+    HarnessConfig,
+    looks_like_snapshot,
+    resolve_embed_model_path,
+    resolve_model_path,
+)
 from .context import Context, PluginLoader
+from .embeddings import EmbeddingProvider, EmbeddingsPlugin
 from .errors import ConfigError, HarnessError, ProviderError
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
@@ -214,6 +220,37 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="display stop-slop canonical before/after transformations",
     )
+    parser.add_argument(
+        "--embed-model-path",
+        type=Path,
+        default=None,
+        help=(
+            "path to a sentence-transformers snapshot (e.g. all-MiniLM-L6-v2); "
+            "default: $GLMH_EMBED_MODEL_PATH, then ~/all-MiniLM-L6-v2 when present"
+        ),
+    )
+    parser.add_argument(
+        "--rpc-token",
+        type=str,
+        default=None,
+        help=(
+            "bearer token required by the stdio JSON-RPC server's initialize "
+            "RPC; default: $GLMH_RPC_TOKEN. Disabled when unset."
+        ),
+    )
+    parser.add_argument(
+        "--embed",
+        type=str,
+        default=None,
+        help="embed a text and print the vector as JSON, then exit",
+    )
+    parser.add_argument(
+        "--similarity",
+        nargs=2,
+        metavar=("TEXT_A", "TEXT_B"),
+        default=None,
+        help="print cosine similarity between two texts, then exit",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -244,6 +281,8 @@ _CLI_FIELD_FOR = {
     "skills_dir": "skills_dir",
     "skill_gate_tools": "skill_gate_tools",
     "task_risk": "task_risk",
+    "embed_model_path": "embed_model_path",
+    "rpc_token": "rpc_token",
 }
 
 
@@ -334,24 +373,26 @@ async def run(config: HarnessConfig) -> int:
 
     try:
         loader = PluginLoader(ctx)
-        await loader.mount(
-            [
-                BasePlugin(sessions, tools),
-                BuiltinToolsPlugin(config.workspace_dir),
-                SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
-                SafetyPlugin(config.tool_allowlist),
-                CompactionPlugin(
-                    threshold=config.compaction_threshold,
-                    keep_rounds=config.compaction_keep_rounds,
-                    strategy=config.compaction_strategy,
-                ),
-                SkillsPlugin(
-                    skills_dir=config.skills_dir,
-                    gate_tools=config.skill_gate_tools,
-                    default_risk=RiskLevel.from_str(config.task_risk),
-                ),
-            ]
-        )
+        plugins: list[Any] = [
+            BasePlugin(sessions, tools),
+            BuiltinToolsPlugin(config.workspace_dir),
+            SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
+            SafetyPlugin(config.tool_allowlist),
+            CompactionPlugin(
+                threshold=config.compaction_threshold,
+                keep_rounds=config.compaction_keep_rounds,
+                strategy=config.compaction_strategy,
+            ),
+            SkillsPlugin(
+                skills_dir=config.skills_dir,
+                gate_tools=config.skill_gate_tools,
+                default_risk=RiskLevel.from_str(config.task_risk),
+            ),
+        ]
+        embed_path = resolve_embed_model_path(config)
+        if embed_path is not None:
+            plugins.append(EmbeddingsPlugin(EmbeddingProvider(embed_path)))
+        await loader.mount(plugins)
         agent = AgentLoop(
             ctx,
             llm,  # type: ignore[arg-type]
@@ -385,6 +426,8 @@ async def run(config: HarnessConfig) -> int:
                 pass
             return 130
         exc = run_task.exception()
+        if isinstance(exc, HarnessError):
+            logger.error("%s", exc)
         if isinstance(exc, ConfigError):
             return 2
         if isinstance(exc, ProviderError):
@@ -437,6 +480,30 @@ def doctor(config: HarnessConfig) -> int:
             )
     if config.tool_allowlist:
         rows.append(("tool_allowlist", ",".join(config.tool_allowlist), True))
+    embed_path = resolve_embed_model_path(config)
+    if embed_path is not None:
+        try:
+            from glmharness.embeddings import EmbeddingProvider
+
+            EmbeddingProvider(embed_path).require_snapshot()
+        except ConfigError as exc:
+            rows.append(("embeddings", str(exc), False))
+        else:
+            try:
+                import sentence_transformers  # type: ignore[import-not-found]
+
+                version = getattr(sentence_transformers, "__version__", "ok")
+                rows.append(
+                    ("embeddings", f"{embed_path.resolve()} (sentence-transformers {version})", True)
+                )
+            except ImportError:
+                rows.append(
+                    ("embeddings", f"{embed_path.resolve()} — missing 'glmharness[embeddings]'", False)
+                )
+    else:
+        rows.append(
+            ("embeddings", "disabled (set GLMH_EMBED_MODEL_PATH or --embed-model-path)", True)
+        )
     ws = (config.workspace_dir or Path.cwd()).resolve()
     rows.append(("workspace", str(ws), ws.is_dir()))
     rows.append(("sandbox", config.sandbox_mode, True))
@@ -475,6 +542,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             engine = StopSlopEngine()
             examples = engine.get_examples()
             sys.stdout.write(json.dumps(examples, indent=2) + "\n")
+            return 0
+        if args.embed is not None or args.similarity is not None:
+            embed_config = HarnessConfig()
+            if args.embed_model_path is not None:
+                embed_config.embed_model_path = args.embed_model_path
+            embed_path = resolve_embed_model_path(embed_config)
+            if embed_path is None:
+                raise ConfigError(
+                    "no embedding model: set --embed-model-path (or GLMH_EMBED_MODEL_PATH)"
+                )
+            provider = EmbeddingProvider(embed_path)
+            if args.embed is not None:
+                vector = provider.embed([args.embed])[0]
+                sys.stdout.write(json.dumps({"dim": len(vector), "vector": vector}) + "\n")
+                return 0
+            text_a, text_b = args.similarity
+            score = provider.similarity(text_a, text_b)
+            sys.stdout.write(json.dumps({"similarity": round(score, 4)}) + "\n")
             return 0
 
         config = _merge_config(args)

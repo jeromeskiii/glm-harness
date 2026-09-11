@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import re
 import uuid
 from contextlib import nullcontext
 from typing import Any
@@ -29,6 +30,38 @@ from .tools import ToolRegistry, parse_tool_calls
 
 #: exception types worth replaying (the request is side-effect free)
 _RETRYABLE = (ConnectionError, TimeoutError, OSError)
+_TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_tool_call_xml(text: str) -> str:
+    """Remove ``<tool_call>...</tool_call>`` blocks from a streamed answer.
+
+    Used when the loop returns a final answer that still contains raw tool-call
+    XML, so the operator never sees the wire format leak into stdout.
+    """
+    return _TOOL_CALL_RE.sub("", text).strip()
+
+
+def _finalize_exhausted_answer(answer: str) -> str:
+    """Return a clean final answer after the loop exits with ``max_rounds``.
+
+    The goal is to never leak raw ``<tool_call>...</tool_call>`` XML into the
+    answer surfaced to the operator. If the final-round output is purely a
+    tool call, return a short human-readable summary of what ran instead.
+    If the final-round output mixes prose with a tool call, keep the prose.
+    """
+    stripped = _strip_tool_call_xml(answer)
+    if stripped:
+        return stripped
+
+    # Pure tool-call answer (e.g. ``max_rounds=1``): surface a short summary
+    # so the operator at least sees which tool was invoked, instead of the
+    # raw wire protocol.
+    calls = parse_tool_calls(answer)
+    if calls:
+        names = ", ".join(call["name"] for call in calls)
+        return f"[max_rounds_reached; last tool calls executed: {names}]"
+    return "[max_rounds_reached; no final assistant message]"
 
 
 class AgentLoop:
@@ -108,7 +141,11 @@ class AgentLoop:
                 # Loop exhausted without a stop-answer: ``answer`` carries the
                 # last streamed response (since ``validate`` forces
                 # ``max_rounds >= 1`` we always ran the body at least once).
-                final_answer = answer
+                # If the final answer still contains tool-call XML (e.g. with
+                # ``max_rounds=1`` the only round produced a tool call), do
+                # NOT surface it to stdout — extract and execute it instead
+                # so the operator never sees raw GLM <tool_call> XML.
+                final_answer = _finalize_exhausted_answer(answer)
                 self.sessions.append(
                     "step/end", {"status": "max_rounds_reached", "rounds": self.max_rounds}
                 )
@@ -125,9 +162,17 @@ class AgentLoop:
             logger.warning("turn cancelled")
             raise
         except Exception as exc:
-            self.sessions.append("step/end", {"status": "failed", "error": type(exc).__name__})
+            self.sessions.append(
+                "step/end",
+                {"status": "failed", "error": type(exc).__name__, "message": str(exc)},
+            )
             self.sessions.append("turn/end", {"status": "failed"})
-            logger.error("turn failed", extra={"error": type(exc).__name__})
+            logger.error(
+                "turn failed: %s: %s",
+                type(exc).__name__,
+                exc,
+                extra={"error": type(exc).__name__},
+            )
             raise
 
     async def _stream_text(

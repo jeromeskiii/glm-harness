@@ -8,8 +8,9 @@ from typing import Any, cast
 
 from .builtin_tools import BuiltinToolsPlugin
 from .compaction import CompactionPlugin
-from .config import HarnessConfig, resolve_model_path
+from .config import HarnessConfig, resolve_embed_model_path, resolve_model_path
 from .context import Context, PluginLoader
+from .embeddings import EmbeddingProvider, EmbeddingsPlugin
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging
 from .loop import AgentLoop
@@ -26,6 +27,8 @@ _HELP_TEXT = """Available commands:
   /skills      - List registered skills and triggers
   /slop <text> - Analyze text for AI patterns and score it
   /deslop <text> - Rewrite text to eliminate slop
+  /embed <text> - Embed text with the local embedding model
+  /similar <a> | <b> - Cosine similarity between two texts
   /clear       - Reset current conversation history
   /session     - Show session metrics and persistence path
   /exit, /quit - Terminate the REPL session
@@ -82,24 +85,26 @@ async def run_repl(
     ws = (config.workspace_dir or Path.cwd()).resolve()
 
     loader = PluginLoader(ctx)
-    await loader.mount(
-        [
-            BasePlugin(sessions, tools),
-            BuiltinToolsPlugin(config.workspace_dir),
-            SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
-            SafetyPlugin(config.tool_allowlist),
-            CompactionPlugin(
-                threshold=config.compaction_threshold,
-                keep_rounds=config.compaction_keep_rounds,
-                strategy=config.compaction_strategy,
-            ),
-            SkillsPlugin(
-                skills_dir=config.skills_dir,
-                gate_tools=config.skill_gate_tools,
-                default_risk=RiskLevel.from_str(config.task_risk),
-            ),
-        ]
-    )
+    plugins: list[Any] = [
+        BasePlugin(sessions, tools),
+        BuiltinToolsPlugin(config.workspace_dir),
+        SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
+        SafetyPlugin(config.tool_allowlist),
+        CompactionPlugin(
+            threshold=config.compaction_threshold,
+            keep_rounds=config.compaction_keep_rounds,
+            strategy=config.compaction_strategy,
+        ),
+        SkillsPlugin(
+            skills_dir=config.skills_dir,
+            gate_tools=config.skill_gate_tools,
+            default_risk=RiskLevel.from_str(config.task_risk),
+        ),
+    ]
+    embed_path = resolve_embed_model_path(config)
+    if embed_path is not None:
+        plugins.append(EmbeddingsPlugin(EmbeddingProvider(embed_path)))
+    await loader.mount(plugins)
 
     agent = AgentLoop(
         ctx,
@@ -191,6 +196,26 @@ async def run_repl(
                     for c in res["changes"]:
                         output_func(f"  - {c}\n")
                     output_func("\n")
+                    continue
+                if cmd.startswith("/embed ") or cmd.startswith("/similar "):
+                    provider = ctx.services.get("embeddings")
+                    if provider is None:
+                        output_func(
+                            "Embeddings disabled: set GLMH_EMBED_MODEL_PATH or "
+                            "--embed-model-path.\n\n"
+                        )
+                        continue
+                    if cmd.startswith("/embed "):
+                        text_to_embed = line[7:].strip()
+                        vector = provider.embed([text_to_embed])[0]
+                        output_func(f"dim={len(vector)} vector={json.dumps(vector)}\n\n")
+                        continue
+                    parts = line[9:].split("|", 1)
+                    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                        output_func("Usage: /similar <text a> | <text b>\n\n")
+                        continue
+                    score = provider.similarity(parts[0].strip(), parts[1].strip())
+                    output_func(f"similarity={round(score, 4)}\n\n")
                     continue
                 output_func(f"Unknown command: {line}. Type /help for assistance.\n\n")
                 continue

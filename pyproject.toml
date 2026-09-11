@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "glmharness"
-version = "0.3.2"
+version = "0.4.0"
 description = "H1-style plugin agent harness for local GLM-5.3-Flash inference"
 readme = "README-HARNESS.md"
 requires-python = ">=3.11"
@@ -26,7 +26,14 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-inference = ["torch>=2.1", "transformers>=5.0"]
+inference = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "pillow>=10",
+    "transformers>=5.0",
+    "accelerate>=1.0",
+]
+embeddings = ["sentence-transformers>=3.0"]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",

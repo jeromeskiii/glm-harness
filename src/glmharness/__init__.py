@@ -10,13 +10,26 @@ the kernel.
 
 from __future__ import annotations
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 from .builtin_tools import BuiltinToolsPlugin, resolve_safe_path
 from .bus import EventBus
 from .compaction import CompactionPlugin, compact_session
-from .config import HarnessConfig, looks_like_snapshot, resolve_model_path
+from .config import (
+    HarnessConfig,
+    looks_like_snapshot,
+    resolve_embed_model_path,
+    resolve_model_path,
+)
 from .context import Context, Plugin, PluginLoader
+from .embeddings import (
+    EmbeddingProvider,
+    EmbeddingsPlugin,
+    cosine_similarity,
+    make_embed_text_tool,
+    make_semantic_rank_tool,
+    make_semantic_similarity_tool,
+)
 from .errors import (
     ConfigError,
     HarnessError,
@@ -58,6 +71,8 @@ __all__ = [
     "CompactionPlugin",
     "ConfigError",
     "Context",
+    "EmbeddingProvider",
+    "EmbeddingsPlugin",
     "EventBus",
     "HarnessConfig",
     "HarnessError",
@@ -86,14 +101,19 @@ __all__ = [
     "TransformersGLM",
     "__version__",
     "compact_session",
+    "cosine_similarity",
     "default_skills",
     "import_skills_from_dir",
     "looks_like_snapshot",
+    "make_embed_text_tool",
+    "make_semantic_rank_tool",
+    "make_semantic_similarity_tool",
     "make_stop_slop_analyze_tool",
     "make_stop_slop_examples_tool",
     "make_stop_slop_rewrite_tool",
     "make_stop_slop_rules_tool",
     "parse_tool_calls",
+    "resolve_embed_model_path",
     "resolve_model_path",
     "resolve_safe_path",
     "run_repl",

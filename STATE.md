@@ -40,6 +40,31 @@
 - Full test suite: 161 passed, 2 skipped (100% pass rate).
 - 0 pyright errors, 0 ruff warnings across `src` and `tests`.
 
+## Phase 7: Local Snapshot Loader Fix (COMPLETED)
+- Fixed `TransformersGLM` (`src/glmharness/llm.py`) to load the GLM-5.3-Flash snapshot through the multimodal image-text-to-text stack (`AutoProcessor` + `AutoModelForImageTextToText`) instead of `AutoModelForCausalLM` / `AutoTokenizer`, which transformers rejects for `glm5_next` (`Unrecognized configuration class`).
+- Extended the `[inference]` extra with `accelerate`, `torchvision`, `pillow` so the multimodal processor and `device_map="auto"` load out of the box.
+- Surfaced the exception type in text-mode `turn failed` logs (`src/glmharness/loop.py`).
+- Added regression test `test_transformers_glm_load_uses_multimodal_stack`.
+- Verified end-to-end: `--doctor` fully green; the snapshot path now reaches weight loading and fails cleanly with `FileNotFoundError: model-00001-of-00062.safetensors` until shards are placed.
+- 162 tests passing, 0 pyright errors, 0 ruff warnings.
+
+## Phase 8: Weight-Presence Gate & Endpoint Verification (COMPLETED)
+- The vendored repo is a **config-only snapshot**: the full FP8 checkpoint is 328 GB (62 shards), which dequantizes to ~660 GB at load — infeasible on this host (M4 Pro, 25.8 GB RAM, 331 GB free disk). Weights were not downloaded.
+- Added `TransformersGLM._require_shards()` (`src/glmharness/llm.py`): a snapshot without `model-*.safetensors` shards now fails fast with an actionable `ConfigError` (exit 2) explaining the disk/RAM requirement and the `--api-base` alternative.
+- `HarnessError` messages from a failed turn now reach stderr in text mode before the CLI returns the mapped exit code (`src/glmharness/cli.py`).
+- Added regression test `test_transformers_glm_load_fails_fast_without_weights`.
+- Verified the supported real-model path end-to-end: ran `glm-harness --api-base http://127.0.0.1:8777/v1 'say hello'` against a local OpenAI-compatible streaming stub — full pipeline (skills, plugins, agent loop) streamed the answer, exit 0. Opt-in integration tests (`GLMH_RUN_INTEGRATION=1`) pass.
+- Documented the snapshot requirements in `README-HARNESS.md`.
+- 163 tests passing, 2 skipped; 0 pyright errors, 0 ruff warnings.
+
+## Phase 9: Semantic Embeddings Integration (COMPLETED)
+- Shipped `src/glmharness/embeddings.py`: `EmbeddingProvider` (lazy sentence-transformers loader with fail-fast snapshot check), `cosine_similarity` (numpy-free), `EmbeddingsPlugin`, and tool factories `embed_text` / `semantic_similarity` / `semantic_rank`.
+- Added `[embeddings]` extra (`sentence-transformers>=3.0`) to `pyproject.toml`; installed sentence-transformers 6.0.1 via `uv sync`.
+- Wired config (`GLMH_EMBED_MODEL_PATH` / `--embed-model-path`), auto-resolution of `~/all-MiniLM-L6-v2`, plugin mounting in all three carriers (`cli.py` run, `repl.py`, `server.py`), `--doctor` embeddings row (FAIL when the snapshot or the extra is missing), CLI actions `--embed` / `--similarity`, and REPL commands `/embed` / `/similar`.
+- JSON-RPC server advertises `embeddings: true` in `runtimeCapabilities` when the provider mounts; semantic tools are reachable over `tools/list` + `tools/execute`.
+- Verified against the real snapshot at `/Users/ohmskiii/all-MiniLM-L6-v2`: 384-dim vectors, similarity 0.566 (ML pair) vs 0.149 (distant) vs 1.0 (identical); doctor reports the resolved path; REPL `/tools` lists the three semantic tools; server `tools/execute` returns `{"similarity": 0.6916}` for the ML pair.
+- 173 tests passing, 2 skipped; 0 pyright errors, 0 ruff warnings. Bumped to v0.4.0.
+
 ## Summary of Completed Phases
 - **Phase 1**: Core Tool Battery & Execution Confinement.
 - **Phase 2**: Remote / OpenAI-Compatible LLM Adapter.
@@ -47,6 +72,9 @@
 - **Phase 4**: Dynamic Multi-Harness (DMH) Integration & Replay / Token Compaction.
 - **Phase 5**: Dynamic Skill Trigger & Tool Gating System.
 - **Phase 6**: Stop-Slop Prose Quality Engine & Tool Integration.
+- **Phase 7**: Local Snapshot Loader Fix (multimodal image-text-to-text stack).
+- **Phase 8**: Weight-Presence Gate & Endpoint Verification.
+- **Phase 9**: Semantic Embeddings Integration (all-MiniLM-L6-v2).
 
 
 

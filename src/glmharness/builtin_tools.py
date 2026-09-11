@@ -20,6 +20,10 @@ from .stop_slop import (
 from .tools import Tool, ToolRegistry
 
 _MAX_OUTPUT_BYTES = 50_000
+#: Cap a single ``read_file`` fetch at 10 MiB so a malicious or accidental
+#: very large file cannot exhaust memory before slicing. The slice is still
+#: bounded by ``limit`` lines, but the initial read was unbounded.
+_READ_FILE_MAX_BYTES = 10 * 1024 * 1024
 
 
 def resolve_safe_path(base: Path, relative_or_absolute: str | Path) -> Path:
@@ -58,6 +62,14 @@ def make_read_file_tool(workspace: Path) -> Tool:
             raise FileNotFoundError(f"file not found: {args['path']}")
         offset = int(args.get("offset", 0))
         limit = int(args.get("limit", 2000))
+        try:
+            size = target.stat().st_size
+        except OSError as exc:
+            raise FileNotFoundError(f"file not readable: {args['path']}") from exc
+        if size > _READ_FILE_MAX_BYTES:
+            raise ValueError(
+                f"file too large to read in one call: {size} bytes > {_READ_FILE_MAX_BYTES} bytes"
+            )
         content = target.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         total_lines = len(lines)

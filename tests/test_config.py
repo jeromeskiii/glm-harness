@@ -170,3 +170,9 @@ def test_resolve_model_path_keeps_api_base(tmp_path: Path) -> None:
     config = HarnessConfig(api_base="http://localhost:8000/v1")
     resolve_model_path(config, cwd=tmp_path)
     assert config.model_path is None
+
+
+def test_from_env_reads_rpc_token(monkeypatch) -> None:
+    monkeypatch.setenv("GLMH_RPC_TOKEN", "shared-secret")
+    config = HarnessConfig.from_env()
+    assert config.rpc_token == "shared-secret"

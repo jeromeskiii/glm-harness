@@ -329,3 +329,49 @@ def test_loop_max_rounds_reached_records_status() -> None:
     asyncio.run(AgentLoop(ctx, AlwaysTooling(), log, tools, max_rounds=3).run("x"))
     last_step = next(e for e in reversed(log.events) if e.type == "step/end")
     assert last_step.data["status"] == "max_rounds_reached"
+
+
+async def test_loop_max_rounds_one_with_tool_call_returns_no_raw_xml(tmp_path) -> None:
+    """With ``max_rounds=1`` and a tool-call answer, the operator must NOT see
+    GLM <tool_call> XML on stdout; the harness returns a serialized fallback.
+    """
+    ctx = Context()
+    tools = ToolRegistry(ctx)
+    tools.register(
+        Tool(
+            name="noop",
+            description="nop",
+            schema={"type": "object", "properties": {}},
+            handler=lambda args: {},
+        )
+    )
+    ctx.provide("sessions", SessionLog())
+    provider = MockLLM(
+        "<tool_call>noop<arg_key>x</arg_key><arg_value>1</arg_value></tool_call>"
+    )
+    loop = AgentLoop(ctx, provider, ctx.get("sessions"), tools, max_rounds=1)
+    answer = await loop.run("do something")
+    assert "<tool_call>" not in answer
+    assert "</tool_call>" not in answer
+
+
+async def test_loop_records_error_message_on_failure(ctx) -> None:
+    """Failed turns must include ``message`` in ``step/end``, not only the
+    exception class name (operations reviewers need the str() body to debug).
+    """
+    log = SessionLog()
+    ctx.provide("sessions", log)
+    tools = ToolRegistry(ctx)
+
+    class BoomLLM:
+        async def stream(self, messages, tools=None):
+            raise RuntimeError("kaboom-from-mock")
+            yield ""  # pragma: no cover -- unreachable, type-checker appeasement
+
+    loop = AgentLoop(ctx, BoomLLM(), log, tools, max_rounds=1)
+    with pytest.raises(RuntimeError, match="kaboom-from-mock"):
+        await loop.run("test")
+    failed = [e for e in log.events if e.type == "step/end"]
+    assert failed and failed[-1].data["status"] == "failed"
+    assert failed[-1].data["error"] == "RuntimeError"
+    assert "kaboom-from-mock" in failed[-1].data["message"]

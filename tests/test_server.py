@@ -121,3 +121,55 @@ async def test_server_error_handling(tmp_path: Path) -> None:
     assert resps[2]["error"]["code"] == -32601  # Method not found
     assert resps[3]["error"]["code"] == -32602  # Invalid params
     assert resps[4]["result"]["ok"] is True
+
+
+async def test_server_rpc_token_blocks_pre_initialize(tmp_path: Path) -> None:
+    """When ``rpc_token`` is set, every call before ``initialize`` is rejected."""
+    reqs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "initialize",
+            "params": {"authToken": "secret"},
+        },
+        {"jsonrpc": "2.0", "id": 3, "method": "ping", "params": {}},
+        {"jsonrpc": "2.0", "id": 4, "method": "shutdown", "params": {}},
+    ]
+    reader, writer = _make_server_io(reqs)
+    config = HarnessConfig(mock="ok", workspace_dir=tmp_path, rpc_token="secret")
+    server = ProtocolServer(config, reader=reader, writer=writer)
+    await server.serve()
+    resps = _read_responses(writer)
+    assert resps[0]["error"]["code"] == -32001
+    assert resps[1]["result"]["abiVersion"] == 2
+    assert resps[1]["result"]["runtimeCapabilities"]["auth"] is True
+    assert resps[2]["result"]["ok"] is True
+    assert resps[3]["result"]["ok"] is True
+
+
+async def test_server_rpc_token_rejects_wrong_token(tmp_path: Path) -> None:
+    """initialize with the wrong token fails closed."""
+    reqs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"authToken": "wrong"}},
+    ]
+    reader, writer = _make_server_io(reqs)
+    config = HarnessConfig(mock="ok", workspace_dir=tmp_path, rpc_token="secret")
+    server = ProtocolServer(config, reader=reader, writer=writer)
+    await server.serve()
+    resps = _read_responses(writer)
+    assert resps[0]["error"]["code"] == -32001
+    assert "authToken" in resps[0]["error"]["message"]
+
+
+async def test_server_no_token_keeps_open_behavior(tmp_path: Path) -> None:
+    """Without an ``rpc_token`` the protocol keeps the existing open behavior."""
+    reqs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}},
+    ]
+    reader, writer = _make_server_io(reqs)
+    config = HarnessConfig(mock="ok", workspace_dir=tmp_path)
+    server = ProtocolServer(config, reader=reader, writer=writer)
+    await server.serve()
+    resps = _read_responses(writer)
+    assert resps[0]["result"]["ok"] is True

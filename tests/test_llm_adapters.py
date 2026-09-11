@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins as _bi
+import json
 import sys
 
 import pytest
@@ -45,6 +46,65 @@ def test_transformers_glm_load_is_idempotent_when_model_already_loaded(tmp_path,
     adapter.tokenizer = object()  # type: ignore[assignment]
     # No import attempted; the function returns immediately.
     assert adapter._load() is None
+
+
+def test_transformers_glm_load_uses_multimodal_stack(tmp_path, monkeypatch) -> None:
+    """GLM-5.3-Flash is an image-text-to-text model: load via the I2T stack."""
+    import types as _types
+
+    from glmharness import TransformersGLM
+
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"a.b": "model-00001-of-00001.safetensors"}})
+    )
+    (tmp_path / "model-00001-of-00001.safetensors").write_bytes(b"")
+    calls: list[tuple[str, ...]] = []
+
+    class _FakeTokenizer:
+        pass
+
+    class _FakeProcessor:
+        tokenizer = _FakeTokenizer()
+
+        @classmethod
+        def from_pretrained(cls, path, trust_remote_code=False):
+            calls.append(("processor", str(path)))
+            return cls()
+
+    class _FakeModel:
+        @classmethod
+        def from_pretrained(cls, path, device_map=None, trust_remote_code=False, torch_dtype=None):
+            calls.append(("model", str(path), device_map))
+            return cls()
+
+    fake_transformers = _types.ModuleType("transformers")
+    fake_transformers.AutoProcessor = _FakeProcessor
+    fake_transformers.AutoModelForImageTextToText = _FakeModel
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    adapter = TransformersGLM(tmp_path, "max", 8)
+    adapter._load()
+
+    assert adapter.processor is not None
+    assert adapter.tokenizer is adapter.processor.tokenizer
+    assert ("processor", str(tmp_path)) in calls
+    assert ("model", str(tmp_path), "auto") in calls
+
+
+def test_transformers_glm_load_fails_fast_without_weights(tmp_path, monkeypatch) -> None:
+    """A config-only snapshot raises an actionable ConfigError before loading."""
+    import types as _types
+
+    from glmharness import TransformersGLM
+
+    fake_transformers = _types.ModuleType("transformers")
+    fake_transformers.AutoProcessor = object()
+    fake_transformers.AutoModelForImageTextToText = object()
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    adapter = TransformersGLM(tmp_path, "max", 8)
+    with pytest.raises(ConfigError, match="snapshot has no model weights"):
+        adapter._load()
 
 
 class _MockResponse:

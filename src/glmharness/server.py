@@ -7,6 +7,7 @@ Dynamic Multi-Harness (DMH) host controllers.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import sys
 import time
@@ -17,8 +18,9 @@ from typing import Any, TextIO, cast
 from . import __version__
 from .builtin_tools import BuiltinToolsPlugin
 from .compaction import CompactionPlugin, compact_session
-from .config import HarnessConfig, resolve_model_path
+from .config import HarnessConfig, resolve_embed_model_path, resolve_model_path
 from .context import Context, PluginLoader
+from .embeddings import EmbeddingProvider, EmbeddingsPlugin
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
@@ -62,6 +64,10 @@ class ProtocolServer:
         self.ctx: Context | None = None
         self.tools: ToolRegistry | None = None
         self.llm: Any = None
+        self.embedding_path: Path | None = None
+        # ``initialize`` flips this once; the configured token, if any, was
+        # verified against the request at that moment. Empty string disables.
+        self._auth_ok: bool = config.rpc_token is None
 
     def _write_frame(self, frame: dict[str, Any]) -> None:
         raw = json.dumps(frame, ensure_ascii=False)
@@ -105,24 +111,26 @@ class ProtocolServer:
             )
 
         loader = PluginLoader(self.ctx)
-        await loader.mount(
-            [
-                BasePlugin(initial_log, self.tools),
-                BuiltinToolsPlugin(self.config.workspace_dir),
-                SandboxPlugin(mode=self.config.sandbox_mode),  # type: ignore[arg-type]
-                SafetyPlugin(self.config.tool_allowlist),
-                CompactionPlugin(
-                    threshold=self.config.compaction_threshold,
-                    keep_rounds=self.config.compaction_keep_rounds,
-                    strategy=self.config.compaction_strategy,
-                ),
-                SkillsPlugin(
-                    skills_dir=self.config.skills_dir,
-                    gate_tools=self.config.skill_gate_tools,
-                    default_risk=RiskLevel.from_str(self.config.task_risk),
-                ),
-            ]
-        )
+        plugins: list[Any] = [
+            BasePlugin(initial_log, self.tools),
+            BuiltinToolsPlugin(self.config.workspace_dir),
+            SandboxPlugin(mode=self.config.sandbox_mode),  # type: ignore[arg-type]
+            SafetyPlugin(self.config.tool_allowlist),
+            CompactionPlugin(
+                threshold=self.config.compaction_threshold,
+                keep_rounds=self.config.compaction_keep_rounds,
+                strategy=self.config.compaction_strategy,
+            ),
+            SkillsPlugin(
+                skills_dir=self.config.skills_dir,
+                gate_tools=self.config.skill_gate_tools,
+                default_risk=RiskLevel.from_str(self.config.task_risk),
+            ),
+        ]
+        self.embedding_path = resolve_embed_model_path(self.config)
+        if self.embedding_path is not None:
+            plugins.append(EmbeddingsPlugin(EmbeddingProvider(self.embedding_path)))
+        await loader.mount(plugins)
 
     async def handle_request(self, frame: dict[str, Any]) -> None:
         req_id: object = frame.get("id")
@@ -134,7 +142,26 @@ class ProtocolServer:
             self._error(req_id, -32600, "Invalid Request: method must be string")
             return
 
+        # Auth gate: when a token is configured, every method except
+        # ``initialize`` (which itself authenticates the peer) is rejected
+        # until a successful ``initialize`` was processed.
+        if self.config.rpc_token is not None and not self._auth_ok and method != "initialize":
+            self._error(req_id, -32001, "Unauthorized: send initialize first")
+            return
+
         if method == "initialize":
+            expected = self.config.rpc_token
+            if expected is not None:
+                header_token = str(params.get("authToken", ""))
+                # hmac.compare_digest keeps the comparison constant-time so a
+                # local timing probe cannot enumerate the configured token.
+                if not header_token or not hmac.compare_digest(header_token, expected):
+                    self._error(req_id, -32001, "Unauthorized: authToken missing or wrong")
+                    return
+                self._auth_ok = True
+            capabilities = dict(_SERVER_CAPABILITIES)
+            capabilities["embeddings"] = self.embedding_path is not None
+            capabilities["auth"] = expected is not None
             self._success(
                 req_id,
                 {
@@ -145,7 +172,7 @@ class ProtocolServer:
                         "vendor": "zhipu",
                         "protocol": "glm-jsonrpc-stdio",
                     },
-                    "runtimeCapabilities": dict(_SERVER_CAPABILITIES),
+                    "runtimeCapabilities": capabilities,
                     "authMethods": [],
                 },
             )

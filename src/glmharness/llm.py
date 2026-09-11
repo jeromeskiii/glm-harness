@@ -241,8 +241,35 @@ class TransformersGLM:
         self.model_path = model_path
         self.reasoning_effort = reasoning_effort
         self.max_new_tokens = max_new_tokens
+        self.processor: Any = None
         self.model: Any = None
         self.tokenizer: Any = None
+
+    def _require_shards(self) -> None:
+        """Fail fast with an actionable error when the snapshot has no weights.
+
+        The vendored repo is a config-only snapshot. The full FP8 checkpoint is
+        ~330 GB on disk and dequantizes to ~660 GB at load, so operator-class
+        laptops must use a served endpoint instead.
+        """
+        index = self.model_path / "model.safetensors.index.json"
+        try:
+            data = json.loads(index.read_text())
+            shards = sorted({self.model_path / name for name in data.get("weight_map", {}).values()})
+        except (OSError, ValueError):
+            shards = sorted(self.model_path.glob("*.safetensors"))
+        if shards and all(p.exists() for p in shards):
+            return
+        if shards:
+            missing = [p.name for p in shards if not p.exists()]
+            detail = f"{len(missing)} missing shard(s), e.g. {missing[0]}"
+        else:
+            detail = "no safetensors shards found"
+        raise ConfigError(
+            f"snapshot has no model weights: {detail}. The full FP8 checkpoint "
+            "needs ~330 GB disk and ~660 GB RAM once dequantized; run against a "
+            "served endpoint instead: glm-harness --api-base http://HOST:PORT/v1 'prompt'"
+        )
 
     def _load(self) -> None:
         if self.model is not None:
@@ -252,16 +279,21 @@ class TransformersGLM:
             # without it; the runtime import is what the user gets when they
             # install the optional dep. Each downstream use is annotated
             # with the appropriate type-ignore comment below.
-            from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import-not-found]
+            from transformers import (  # type: ignore[import-not-found]
+                AutoModelForImageTextToText,
+                AutoProcessor,
+            )
         except ImportError as exc:
             raise ConfigError(
                 "local mode requires the 'inference' extra: "
                 "pip install 'glmharness[inference]'"
             ) from exc
-        self.tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType]
+        self._require_shards()
+        self.processor = AutoProcessor.from_pretrained(  # type: ignore[reportUnknownMemberType]
             self.model_path, trust_remote_code=True
         )
-        self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
+        self.tokenizer = self.processor.tokenizer  # type: ignore[reportUnknownMemberType]
+        self.model = AutoModelForImageTextToText.from_pretrained(  # type: ignore[reportUnknownMemberType]
             self.model_path, device_map="auto", trust_remote_code=True, torch_dtype="auto"
         )
 
@@ -280,7 +312,7 @@ class TransformersGLM:
         self, messages: list[dict[str, str]], tools: list[dict[str, Any]] | None = None
     ) -> AsyncIterator[str]:
         self._load()
-        prompt = self.tokenizer.apply_chat_template(
+        prompt = self.processor.apply_chat_template(  # type: ignore[union-attr]
             messages,
             tools=tools or None,
             tokenize=False,

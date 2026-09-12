@@ -299,7 +299,6 @@ wheels = [
 
 [[package]]
 name = "glmharness"
-version = "0.4.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -335,7 +334,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'inference'", specifier = ">=0.16" },
     { name = "transformers", marker = "extra == 'inference'", specifier = ">=5.0" },
 ]
-provides-extras = ["inference", "embeddings", "dev"]
+provides-extras = ["dev", "embeddings", "inference"]
 
 [[package]]
 name = "h11"

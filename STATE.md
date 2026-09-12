@@ -65,6 +65,28 @@
 - Verified against the real snapshot at `/Users/ohmskiii/all-MiniLM-L6-v2`: 384-dim vectors, similarity 0.566 (ML pair) vs 0.149 (distant) vs 1.0 (identical); doctor reports the resolved path; REPL `/tools` lists the three semantic tools; server `tools/execute` returns `{"similarity": 0.6916}` for the ML pair.
 - 173 tests passing, 2 skipped; 0 pyright errors, 0 ruff warnings. Bumped to v0.4.0.
 
+## Phase 10: Workspace Search Tools Integration (COMPLETED)
+- Shipped `make_find_files_tool` and `make_grep_search_tool` in `src/glmharness/builtin_tools.py`.
+- Auto-registered both tools in `BuiltinToolsPlugin.apply()`.
+- Exported tool factories in `src/glmharness/__init__.py`.
+- Added unit tests in `tests/test_search_tools.py` covering glob patterns, directory recursion, regex searching, case sensitivity, file filters, and boundary security.
+- Full test suite: 187 passed, 2 skipped (100% pass rate). 0 ruff errors.
+
+## Phase 11: HTTP / Web Document Reader Tool Integration (COMPLETED)
+- Shipped `clean_html_to_markdown`, `is_blocked_host`, and `make_fetch_url_tool` in `src/glmharness/builtin_tools.py`.
+- Implemented robust HTML parsing with tag stripping (`<script>`, `<style>`, `<nav>`, etc.) and Markdown conversion for headers, links, and code blocks.
+- Implemented SSRF filtering for loopback, local, and private IPv4/IPv6 address blocks.
+- Auto-registered `fetch_url` in `BuiltinToolsPlugin.apply()` with `enable_fetch_url` configuration.
+- Exported tool factory and HTML cleaner from `src/glmharness/__init__.py`.
+- Added unit tests in `tests/test_fetch_url.py` (7/7 passed).
+- Full test suite: 194 passed, 2 skipped (100% pass rate). 0 ruff errors.
+
+## Phase 12: Remote Path End-to-End Coverage & Version Single-Sourcing (COMPLETED)
+- Added `tests/test_e2e_remote.py`: stands up a local OpenAI-compatible SSE stub on a real socket and drives the full CLI (config merge, plugin mount, skill discovery, agent loop, tool dispatch) — one-shot streaming plus a streamed tool call whose result is dispatched and fed back to the endpoint. Replaces the ad-hoc Phase 8 stub that was never committed, which left the supported real-model path without reproducible coverage.
+- Verified the shipped binary end-to-end: `glm-harness --api-base http://127.0.0.1:8777/v1 --workspace <ws> 'list the workspace'` against the stub — 2 provider calls, 15 tools advertised, `list_dir` executed against the real workspace, tool result returned to the endpoint, exit 0.
+- Fixed version drift: `pyproject.toml` declared `0.4.0` while `CHANGELOG` had already shipped `0.4.1` and `0.4.2`. The version now derives from `glmharness.__version__` through `[tool.hatch.version]` (single source), bumped to 0.4.3.
+- Full test suite: 196 passed, 2 skipped (100% pass rate). 0 ruff errors, 0 pyright errors.
+
 ## Summary of Completed Phases
 - **Phase 1**: Core Tool Battery & Execution Confinement.
 - **Phase 2**: Remote / OpenAI-Compatible LLM Adapter.
@@ -75,6 +97,11 @@
 - **Phase 7**: Local Snapshot Loader Fix (multimodal image-text-to-text stack).
 - **Phase 8**: Weight-Presence Gate & Endpoint Verification.
 - **Phase 9**: Semantic Embeddings Integration (all-MiniLM-L6-v2).
+- **Phase 10**: Workspace Search Tools (`find_files` & `grep_search`).
+- **Phase 11**: HTTP / Web Document Reader Tool (`fetch_url`).
+- **Phase 12**: Remote Path End-to-End Coverage & Version Single-Sourcing.
+
+
 
 
 

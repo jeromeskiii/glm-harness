@@ -5,9 +5,10 @@
 - **`TransformersGLM`** requires `transformers>=5.0` and `torch>=2.1`; live
   inference is **not** exercised by unit tests (the module is isolated and
   gated behind the `inference` extra).
-- **Tool execution** still defaults to `allow` once a tool registers; a
-  sandbox/approval plugin must gate external effects. The kernel exposes
-  the seam (`tools/pre-execute`) — write a plugin, don't extend the kernel.
+- **Tool execution** is subject to the default `deny` sandbox policy for
+  mutating tools; a sandbox/approval plugin controls external effects. The
+  kernel exposes the seam (`tools/pre-execute`) — write a plugin, don't extend
+  the kernel.
 - **Session JSONL** uses an explicit corruption policy (`skip`/`rename`/
   `fail`); schema migrations are not provided — adding a new event type is
   a wire-format change and warrants `corrupt_policy="fail"` pre-deploy.

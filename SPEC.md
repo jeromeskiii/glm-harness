@@ -141,5 +141,44 @@ Install and wire the `stop-slop` agent skill from `/Users/ohmskiii/Desktop/stop-
 - CLI: `--slop-analyze <text>`, `--slop-rewrite <text>`, `--slop-rules [category]`, `--slop-examples`.
 - REPL: `/slop <text>` and `/deslop <text>` commands.
 
+---
+
+## Phase 10: Workspace Search Tools (`find_files` & `grep_search`)
+
+### Goal
+Provide high-speed, boundary-confined codebase discovery tools inside the built-in tool battery:
+1. **`find_files`**: Glob pattern matching (`*`, `*.py`, `**/*.json`) across workspace directories with file/directory filtering and recursive exclusion of vendor/cache paths (`.git`, `__pycache__`, `.venv`, etc.).
+2. **`grep_search`**: High-performance text and regex search with case-sensitivity controls, filename glob filtering (`include_pattern`), automatic binary file skipping, and per-line match citations (`path`, `line_number`, `line`).
+
+### Architecture & Components
+- **`src/glmharness/builtin_tools.py`**:
+  - `make_find_files_tool(workspace: Path) -> Tool`
+  - `make_grep_search_tool(workspace: Path) -> Tool`
+  - Auto-registered in `BuiltinToolsPlugin.apply()`.
+- **`src/glmharness/__init__.py`**:
+  - Re-exported in package root and added to `__all__`.
+- **`tests/test_search_tools.py`**:
+  - Comprehensive test suite covering glob matching, regex searches, case insensitivity, boundary enforcement, and result truncation.
+
+---
+
+## Phase 11: HTTP / Web Document Reader Tool (`fetch_url`)
+
+### Goal
+Provide a secure, dependency-free HTTP/HTTPS content extraction tool for accessing online documentation, public APIs, and web references during agent execution.
+
+### Architecture & Components
+- **`src/glmharness/builtin_tools.py`**:
+  - `clean_html_to_markdown(html_content: str) -> tuple[str | None, str]`: Standard library HTMLParser that removes `<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, extracts `<title>`, and converts headers, links, and code blocks to Markdown.
+  - `is_blocked_host(host: str) -> bool`: SSRF protection blocking localhost, private subnets (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.169.254), and loopback/link-local IPv6 addresses.
+  - `make_fetch_url_tool() -> Tool`: Async-safe HTTP tool fetching URL responses, parsing content types (HTML/JSON/Plain text), and truncating to max characters.
+  - Auto-registered in `BuiltinToolsPlugin.apply()`.
+- **`src/glmharness/__init__.py`**:
+  - Re-exported `make_fetch_url_tool` and `clean_html_to_markdown`.
+- **`tests/test_fetch_url.py`**:
+  - Unit tests covering HTML-to-markdown conversion, JSON handling, scheme restrictions, SSRF blocking, HTTP error codes, and plugin registration.
+
+
+
 
 

@@ -30,7 +30,6 @@
 - `test_harness.py` (legacy shim) — preserved for audit comparability;
   same coverage as the original single-file harness.
 
-Fast check: `python3 -m pytest -q`. No live-model test runs by default
-because the snapshot is large and hardware-dependent; opt in by installing
-`pip install -e ".[inference]"` and writing a test against a fixture that
-patches `TransformersGLM._load`.
+Fast check: `python3 -m pytest -q`. The suite includes two integration tests;
+live-model integration is opt-in through `GLMH_RUN_INTEGRATION=1` and is not
+run by default because the snapshot is large and hardware-dependent.

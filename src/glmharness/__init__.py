@@ -10,9 +10,16 @@ the kernel.
 
 from __future__ import annotations
 
-__version__ = "0.4.0"
+__version__ = "0.4.3"
 
-from .builtin_tools import BuiltinToolsPlugin, resolve_safe_path
+from .builtin_tools import (
+    BuiltinToolsPlugin,
+    clean_html_to_markdown,
+    make_fetch_url_tool,
+    make_find_files_tool,
+    make_grep_search_tool,
+    resolve_safe_path,
+)
 from .bus import EventBus
 from .compaction import CompactionPlugin, compact_session
 from .config import (
@@ -100,12 +107,16 @@ __all__ = [
     "ToolRegistry",
     "TransformersGLM",
     "__version__",
+    "clean_html_to_markdown",
     "compact_session",
     "cosine_similarity",
     "default_skills",
     "import_skills_from_dir",
     "looks_like_snapshot",
     "make_embed_text_tool",
+    "make_fetch_url_tool",
+    "make_find_files_tool",
+    "make_grep_search_tool",
     "make_semantic_rank_tool",
     "make_semantic_similarity_tool",
     "make_stop_slop_analyze_tool",

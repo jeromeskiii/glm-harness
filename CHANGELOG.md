@@ -3,6 +3,52 @@
 All notable changes to the GLM harness ship in this file. Versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-09-12
+
+Reproducible end-to-end coverage for the remote model path, and a
+single-sourced package version.
+
+### Added
+
+- ``tests/test_e2e_remote.py``: drives the full CLI against a local
+  OpenAI-compatible streaming stub over a real socket — covering one-shot
+  streaming and a streamed tool call whose result is dispatched and fed back
+  to the endpoint. Replaces the ad-hoc stub that verified Phase 8 and was
+  never committed.
+
+### Fixed
+
+- ``pyproject.toml`` still declared ``0.4.0`` while ``CHANGELOG`` had already
+  shipped ``0.4.1`` and ``0.4.2``. The version now derives from
+  ``glmharness.__version__`` through ``[tool.hatch.version]``, so the two can
+  no longer drift apart.
+
+## [0.4.2] - 2026-09-12
+
+HTTP / Web Document Reader tool added to the built-in tool battery.
+
+### Added
+
+- ``fetch_url``: async-safe HTTP/HTTPS content extraction tool with HTML-to-markdown
+  stripping, plain-text / JSON handling, and SSRF loopback/private IP filtering.
+- ``clean_html_to_markdown``: zero-dependency HTML parser for structured extraction
+  of page titles, headers, links, and code blocks.
+- Tool factory ``make_fetch_url_tool`` and ``clean_html_to_markdown`` exported
+  from ``glmharness`` and mounted in ``BuiltinToolsPlugin``.
+
+## [0.4.1] - 2026-09-12
+
+Workspace codebase search tools added to the built-in tool battery.
+
+### Added
+
+- ``find_files``: glob pattern matching across workspace directories with
+  file/directory type filtering and automatic vendor/cache directory pruning.
+- ``grep_search``: recursive text and regular expression search within workspace
+  files with case sensitivity toggle, file glob filter, and line citations.
+- Tool factories ``make_find_files_tool`` and ``make_grep_search_tool`` exported
+  from ``glmharness`` and mounted in ``BuiltinToolsPlugin``.
+
 ## [0.4.0] - 2026-09-09
 
 Semantic embedding service wired into the harness.

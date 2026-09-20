@@ -57,7 +57,7 @@ def test_import_log_from_jsonl(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_server_initialize_advertises_replay_and_compaction() -> None:
-    cfg = HarnessConfig(mock="mock-reply")
+    cfg = HarnessConfig(mock="mock-reply", rpc_auto_token=False)
     writer = io.StringIO()
     server = ProtocolServer(cfg, writer=writer)
     await server.initialize_runtime()
@@ -74,7 +74,7 @@ async def test_server_initialize_advertises_replay_and_compaction() -> None:
 
 @pytest.mark.asyncio
 async def test_server_session_import_and_compact_rpc() -> None:
-    cfg = HarnessConfig(mock="mock-reply")
+    cfg = HarnessConfig(mock="mock-reply", rpc_auto_token=False)
     writer = io.StringIO()
     server = ProtocolServer(cfg, writer=writer)
     await server.initialize_runtime()

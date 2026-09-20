@@ -78,3 +78,10 @@ async def test_sandbox_ask_mode_non_interactive_denies(
     res = await registry.execute("bash", {"command": "ls"})
     assert res["ok"] is False
     assert res["error"] == "ACTION_REJECTED_BY_OPERATOR"
+
+
+def test_default_mutating_set_covers_github_tools() -> None:
+    """Drift guard: every GitHub mutating tool must be sandbox-gated by default."""
+    from glmharness.github import GITHUB_MUTATING_TOOLS
+
+    assert GITHUB_MUTATING_TOOLS <= SandboxPlugin().mutating_tools

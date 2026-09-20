@@ -109,6 +109,23 @@ def test_request_timeout_zero_disabled_is_valid() -> None:
     HarnessConfig(request_timeout_s=0).validate()
 
 
+def test_temperature_env_and_default(monkeypatch) -> None:
+    assert HarnessConfig().temperature == 0.7
+    monkeypatch.setenv("GLMH_TEMPERATURE", "0.2")
+    config = HarnessConfig.from_env()
+    assert config.temperature == 0.2
+    config.validate()
+
+
+def test_temperature_validation_bounds() -> None:
+    with pytest.raises(ConfigError, match="temperature must be within"):
+        HarnessConfig(temperature=-0.1).validate()
+    with pytest.raises(ConfigError, match="temperature must be within"):
+        HarnessConfig(temperature=2.1).validate()
+    HarnessConfig(temperature=0.0).validate()
+    HarnessConfig(temperature=2.0).validate()
+
+
 def test_looks_like_snapshot(tmp_path) -> None:
     from glmharness.config import looks_like_snapshot, resolve_model_path
 

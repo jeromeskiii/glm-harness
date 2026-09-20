@@ -105,6 +105,35 @@ async def test_async_handler_is_awaited(ctx) -> None:
     assert '"a": 1' in result["content"]
 
 
+async def test_unserializable_result_is_recorded_as_failure(ctx, log) -> None:
+    ctx.provide("sessions", log)
+    registry = ToolRegistry(ctx)
+    registry.register(Tool("bad-json", "bad json", {"type": "object"}, lambda _args: {"bad": {1, 2}}))
+
+    result = await registry.execute("bad-json", {})
+
+    assert result["ok"] is False
+    assert result["error"] == "TypeError"
+    assert log.events[-1].type == "tool/result"
+    assert log.events[-1].data["ok"] is False
+
+
+async def test_invalid_post_execute_result_is_recorded_as_failure(ctx, log) -> None:
+    ctx.provide("sessions", log)
+
+    async def invalid_post(_payload, _next):
+        return {"unexpected": True}
+
+    ctx.on("tools/post-execute", invalid_post)
+    registry = ToolRegistry(ctx)
+    registry.register(Tool("echo", "echo", {"type": "object"}, lambda args: args))
+
+    result = await registry.execute("echo", {"x": 1})
+
+    assert result["ok"] is False
+    assert result["error"] == "TypeError"
+
+
 def test_register_rejects_duplicates(ctx) -> None:
     registry = ToolRegistry(ctx)
     registry.register(Tool("echo", "d", {"type": "object"}, lambda a: a))

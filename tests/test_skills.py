@@ -270,15 +270,21 @@ async def test_skills_plugin_waterfall_and_tool_gating(ctx: Context) -> None:
 
 
 async def test_server_skills_rpc(tmp_path: Path) -> None:
-    config = HarnessConfig(mock="dummy answer", workspace_dir=tmp_path)
+    config = HarnessConfig(mock="dummy answer", workspace_dir=tmp_path, rpc_auto_token=False)
     server = ProtocolServer(config)
     await server.initialize_runtime()
 
     # Test skills/list
-    list_frame = {"jsonrpc": "2.0", "id": 1, "method": "skills/list", "params": {}}
+    list_frame = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
     responses: list[dict[str, Any]] = []
     server._write_frame = lambda frame: responses.append(frame)  # type: ignore[method-assign]
 
+    await server.handle_request(list_frame)
+    assert len(responses) == 1
+    assert responses[0]["result"]["abiVersion"] == 2
+
+    responses.clear()
+    list_frame = {"jsonrpc": "2.0", "id": 1, "method": "skills/list", "params": {}}
     await server.handle_request(list_frame)
     assert len(responses) == 1
     assert "skills" in responses[0]["result"]

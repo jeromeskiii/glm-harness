@@ -89,3 +89,25 @@ async def test_compaction_plugin_triggers_on_agent_request() -> None:
     compacted_events = [e for e in sessions.events if e.type == "session/compacted"]
     assert len(compacted_events) == 1
     assert compacted_events[0].data["dropped_count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_compaction_is_idempotent_and_listener_closes() -> None:
+    ctx = Context()
+    sessions = SessionLog()
+    for i in range(8):
+        sessions.append("user/message", {"content": f"msg {i}"})
+    ctx.services["sessions"] = sessions
+    plugin = CompactionPlugin(threshold=4, keep_rounds=2)
+    plugin.apply(ctx)
+
+    await ctx.events.dispatch("agent/request", "waterfall", {"messages": []})
+    first_count = len([e for e in sessions.events if e.type == "session/compacted"])
+    await ctx.events.dispatch("agent/request", "waterfall", {"messages": []})
+    second_count = len([e for e in sessions.events if e.type == "session/compacted"])
+
+    assert first_count == 1
+    assert second_count == 1
+    assert ctx.events.listener_count("agent/request") == 1
+    await ctx.close()
+    assert ctx.events.listener_count("agent/request") == 0

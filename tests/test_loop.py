@@ -331,6 +331,35 @@ def test_loop_max_rounds_reached_records_status() -> None:
     assert last_step.data["status"] == "max_rounds_reached"
 
 
+def test_loop_deduplicates_reprojected_tool_calls() -> None:
+    ctx = Context()
+    log = SessionLog()
+    tools = ToolRegistry(ctx)
+    ctx.provide("sessions", log)
+    ctx.provide("tools", tools)
+    calls: list[dict] = []
+
+    def record(args):
+        calls.append(args)
+        return {"recorded": args}
+
+    tools.register(Tool("record", "record", {"type": "object"}, record))
+
+    class Repeats:
+        async def stream(self, messages, tools=None):
+            if len(messages) < 3:
+                yield '<tool_call>record<arg_key>x</arg_key><arg_value>1</arg_value></tool_call>'
+            else:
+                yield "done"
+
+    answer = asyncio.run(AgentLoop(ctx, Repeats(), log, tools, max_rounds=3).run("go"))
+
+    assert answer == "done"
+    assert calls == [{"x": 1}]
+    results = [event for event in log.events if event.type == "tool/result"]
+    assert len(results) == 1
+
+
 async def test_loop_max_rounds_one_with_tool_call_returns_no_raw_xml(tmp_path) -> None:
     """With ``max_rounds=1`` and a tool-call answer, the operator must NOT see
     GLM <tool_call> XML on stdout; the harness returns a serialized fallback.

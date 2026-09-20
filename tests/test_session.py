@@ -24,11 +24,11 @@ def test_derive_messages_projects_surface_only() -> None:
     log.append("user/message", {"content": "hi"})
     log.append("assistant/chunk", {"content": "tok"})
     log.append("assistant/message", {"content": "answer"})
-    log.append("tool/result", {"content": "{}"})
+    log.append("tool/result", {"call_id": "call-1", "content": "{}"})
     assert log.derive_messages() == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "answer"},
-        {"role": "tool", "content": "{}"},
+        {"role": "tool", "content": "{}", "tool_call_id": "call-1"},
     ]
 
 

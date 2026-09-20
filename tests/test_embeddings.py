@@ -131,7 +131,13 @@ def test_embed_tool_handler_and_limit(tmp_path, monkeypatch) -> None:
     result = tool.handler({"texts": ["a", "b"]})
     assert result["dim"] == 4
     assert result["count"] == 2
-    assert len(result["embeddings"]) == 2
+    # Full vectors must never be replayed into the conversation: only a small
+    # leading-component preview is exposed, plus guidance to use the
+    # similarity/rank tools instead.
+    assert "embeddings" not in result
+    assert len(result["preview"]) == 2
+    assert all(len(preview) <= 8 for preview in result["preview"])
+    assert "semantic_similarity" in result["note"]
 
     with pytest.raises(ValueError, match="too many texts"):
         tool.handler({"texts": ["x"] * 33})

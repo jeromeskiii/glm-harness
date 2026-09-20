@@ -44,6 +44,9 @@ glm-harness --doctor
 
 # Persist conversation for replay / debugging
 glm-harness --session .sessions/demo.jsonl 'Plan a release'
+
+# GitHub tools: scope to a repo (token picked up from $GITHUB_TOKEN)
+glm-harness --github octocat/Hello-World 'list the open issues'
 ```
 
 ### Configuration

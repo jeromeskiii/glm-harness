@@ -87,6 +87,15 @@
 - Fixed version drift: `pyproject.toml` declared `0.4.0` while `CHANGELOG` had already shipped `0.4.1` and `0.4.2`. The version now derives from `glmharness.__version__` through `[tool.hatch.version]` (single source), bumped to 0.4.3.
 - Full test suite: 196 passed, 2 skipped (100% pass rate). 0 ruff errors, 0 pyright errors.
 
+## Phase 13: GitHub REST Client & Tool Battery (COMPLETED)
+- Shipped `src/glmharness/github.py` (~1.16k lines): zero-dependency GitHub REST provider (`GitHubOptions`, `GitHubProvider`) with an injectable transport seam and hardened inputs — repo slug / git ref / commit SHA validation, HTTPS-only API base (HTTP allowed only for loopback), clamped paging (1–100), 64K file / 8K patch truncation, and response-shape coercion.
+- Shipped 18 model-facing tools: 13 read-only (`github_get_repo`, `github_list_issues`, `github_get_issue`, `github_list_issue_comments`, `github_get_file`, `github_list_pull_requests`, `github_get_pull_request`, `github_list_pull_request_files`, `github_list_branches`, `github_list_commits`, `github_get_commit`, `github_search_code`, `github_search_issues`) and 5 mutating (`github_write_file`, `github_create_issue`, `github_create_pull_request`, `github_create_branch`, `github_add_issue_comment`) gated by `SandboxPlugin` (included in the default mutating set).
+- Wired CLI flags (`--github`, `--github-token`, `--github-api-base`), env vars (`GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_API_BASE`), and auto-mount in `cli.py` when a repo scope or token is present; `doctor` reports the active GitHub scope and auth status.
+- Added unit tests in `tests/test_github_tools.py` (8/8 passed).
+- Fixed env loading: bare conventional names (`GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_API_BASE`) are now honored by `HarnessConfig.from_env` alongside the `GLMH_GITHUB_*` forms; previously only `GLMH_GITHUB_*` reached the config layer even though `cli.py`/`doctor` read the bare names directly.
+- Full test suite: 204 passed, 2 skipped (100% pass rate). 0 ruff errors, 0 pyright errors (`pyright src`, strict).
+- Known nit: `GITHUB_MUTATING_TOOLS` in `github.py` duplicates the GitHub entries in `sandbox._MUTATING_TOOLS`; consolidate to a single source to avoid drift. → **Resolved**: `sandbox._MUTATING_TOOLS` is now composed as `{write_file, edit_file, bash} | GITHUB_MUTATING_TOOLS` (single source in `github.py`), with a drift-guard test in `tests/test_sandbox.py` asserting `GITHUB_MUTATING_TOOLS <= SandboxPlugin().mutating_tools`.
+
 ## Summary of Completed Phases
 - **Phase 1**: Core Tool Battery & Execution Confinement.
 - **Phase 2**: Remote / OpenAI-Compatible LLM Adapter.
@@ -100,6 +109,7 @@
 - **Phase 10**: Workspace Search Tools (`find_files` & `grep_search`).
 - **Phase 11**: HTTP / Web Document Reader Tool (`fetch_url`).
 - **Phase 12**: Remote Path End-to-End Coverage & Version Single-Sourcing.
+- **Phase 13**: GitHub REST Client & Tool Battery (`github.py`, 18 tools, sandbox-gated mutations).
 
 
 

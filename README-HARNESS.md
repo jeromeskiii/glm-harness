@@ -102,6 +102,19 @@ glm-harness --embed 'hello world'
 glm-harness --similarity 'machine learning' 'neural networks'
 ```
 
+### GitHub tools
+
+Setting a repo scope (`--github owner/name` / `GITHUB_REPO`) or a token
+(`--github-token` / `GITHUB_TOKEN`) auto-mounts the zero-dependency GitHub
+REST battery: 13 read-only tools (repo metadata, issues, issue comments,
+files, PRs, PR files, branches, commits, code & issue search) and 5
+mutating tools (`github_write_file`, `github_create_issue`,
+`github_create_pull_request`, `github_create_branch`,
+`github_add_issue_comment`) gated by the sandbox policy. The API base
+defaults to `https://api.github.com` and must be HTTPS (plain HTTP is
+accepted only for loopback development). `glm-harness --doctor` reports
+the active scope and whether a token is configured.
+
 ### Configuration
 
 Knobs are layered: built-in defaults → `GLMH_*` env vars → CLI flags. The
@@ -139,6 +152,9 @@ set of recognized envs with their defaults:
 | `GLMH_SKILL_GATE_TOOLS` | `false` | enable skill-managed tool gating (`--skill-gate-tools`) |
 | `GLMH_TASK_RISK` | `low` | task risk boundary used for skill activation (`--task-risk`) |
 | `GLMH_EMBED_MODEL_PATH` | `~/all-MiniLM-L6-v2` if present | local sentence-transformers snapshot for semantic tools (`--embed-model-path`) |
+| `GITHUB_TOKEN` | — | bearer token for GitHub tools; also read from the environment directly (`--github-token`) |
+| `GITHUB_REPO` | — | default repo scope `owner/name` for GitHub tools (`--github`) |
+| `GITHUB_API_BASE` | `https://api.github.com` | GitHub REST API base URL, HTTPS required (`--github-api-base`) |
 
 Unknown `GLMH_*` variables are logged and ignored — typos won't crash the
 harness.

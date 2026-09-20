@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import re
+import secrets
 import uuid
 from contextlib import nullcontext
 from typing import Any
@@ -99,6 +101,7 @@ class AgentLoop:
         # always updated by the loop body before use.
         round_idx = 0
         answer = ""
+        executed_call_ids: set[str] = set()
         try:
             for round_idx in range(self.max_rounds):
                 messages = self.sessions.derive_messages()
@@ -131,8 +134,26 @@ class AgentLoop:
                     )
                     break
 
-                for call in tool_calls:
-                    await self.tools.execute(call["name"], call.get("arguments", {}))
+                for occurrence, call in enumerate(tool_calls):
+                    encoded_args = json.dumps(
+                        call.get("arguments", {}),
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    call_id = str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_OID,
+                            f"{call['name']}:{encoded_args}:{occurrence}",
+                        )
+                    )
+                    if call_id and call_id in executed_call_ids:
+                        continue
+                    if call_id:
+                        executed_call_ids.add(call_id)
+                    await self.tools.execute(
+                        call["name"], call.get("arguments", {}), call_id=call_id
+                    )
                 self.sessions.append(
                     "step/end",
                     {"status": "tools_executed", "rounds": round_idx + 1, "tools": len(tool_calls)},
@@ -229,9 +250,14 @@ class AgentLoop:
         await asyncio.sleep(delay)
 
     def _retry_delay(self, attempt: int) -> float:
-        """Exponential backoff with deterministic jitter."""
+        """Exponential backoff with OS-CSPRNG jitter.
+
+        A deterministic LCG would let concurrent retriers wake at the same
+        instant under sustained provider failure. ``secrets``-derived jitter
+        spreads them across the configured interval.
+        """
         delay = min(self.retry_base_delay_s * (2 ** (attempt - 1)), self.retry_max_delay_s)
         if self.retry_jitter:
-            x = (attempt * 1103515245 + 12345) % (2**31)
-            delay *= 1 + self.retry_jitter * (2 * x / (2**31) - 1)
+            spread = 2 * secrets.randbelow(2**31) / (2**31) - 1
+            delay *= 1 + self.retry_jitter * spread
         return delay

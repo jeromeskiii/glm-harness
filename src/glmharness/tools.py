@@ -199,13 +199,37 @@ class ToolRegistry:
             )
         return response
 
-    async def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _dispatch_with_timeout(self, event: str, mode: str, payload: Any) -> Any:
+        """Dispatch a bus event with a hard wall-clock bound.
+
+        A stuck listener (e.g. a custom plugin, a runaway regex, or a slow
+        downstream dependency) must not be able to wedge the tool loop. The
+        bound is the configured ``tool_timeout_s``; 0 means no bound (use
+        only when a peer has explicitly opted in).
+        """
+        coro = self.ctx.events.dispatch(event, mode, payload)
+        if self.tool_timeout_s <= 0:
+            return await coro
+        return await asyncio.wait_for(coro, timeout=self.tool_timeout_s)
+
+    async def execute(
+        self, name: str, arguments: dict[str, Any], *, call_id: str | None = None
+    ) -> dict[str, Any]:
         call: dict[str, Any] = {
             "name": name,
             "arguments": copy.deepcopy(arguments),
-            "id": str(uuid.uuid4()),
+            "id": call_id or str(uuid.uuid4()),
         }
-        dispatched = await self.ctx.events.dispatch("tools/pre-execute", "waterfall", call)
+        try:
+            dispatched = await self._dispatch_with_timeout(
+                "tools/pre-execute", "waterfall", call
+            )
+        except TimeoutError:
+            get_logger().warning(
+                "tool pre-execute timed out",
+                extra={"tool": name, "timeout_s": self.tool_timeout_s},
+            )
+            return self._finish(call, {"ok": False, "error": "PRE_EXECUTE_TIMEOUT"})
         # A waterfall listener may short-circuit by returning a partial
         # object (``{"denied": True, "error": "..."}``). Downstream finishers
         # need ``id`` and ``name`` to record the ``tool/result`` fact, so we
@@ -254,12 +278,30 @@ class ToolRegistry:
             return self._finish(
                 call, {"ok": False, "error": type(exc).__name__, "content": str(exc)}
             )
-        post = await self.ctx.events.dispatch(
-            "tools/post-execute", "waterfall", {"call": call, "result": result}
-        )
+        try:
+            post = await self._dispatch_with_timeout(
+                "tools/post-execute",
+                "waterfall",
+                {"call": call, "result": result},
+            )
+            if not isinstance(post, dict) or "result" not in post:
+                raise TypeError("tools/post-execute must return a dict containing result")
+            serialized = json.dumps(post["result"], ensure_ascii=False)
+        except TimeoutError:
+            get_logger().warning(
+                "tool post-execute timed out",
+                extra={"tool": name, "timeout_s": self.tool_timeout_s},
+            )
+            return self._finish(call, {"ok": False, "error": "POST_EXECUTE_TIMEOUT"})
+        except Exception as exc:
+            get_logger().warning(
+                "tool result serialization failed",
+                extra={"tool": name, "error": type(exc).__name__},
+            )
+            return self._finish(call, {"ok": False, "error": type(exc).__name__, "content": str(exc)})
         elapsed = asyncio.get_running_loop().time() - started
         get_logger().info("tool executed", extra={"tool": name, "elapsed_s": round(elapsed, 3)})
-        return self._finish(call, {"ok": True, "content": json.dumps(post["result"], ensure_ascii=False)})
+        return self._finish(call, {"ok": True, "content": serialized})
 
     @staticmethod
     async def _invoke(tool: Tool, arguments: dict[str, Any]) -> Any:

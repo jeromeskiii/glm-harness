@@ -12,9 +12,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from .context import Context
+from .github import GITHUB_MUTATING_TOOLS
 
 SandboxMode = Literal["allow", "deny", "ask"]
-_MUTATING_TOOLS = frozenset({"write_file", "edit_file", "bash"})
+_MUTATING_TOOLS = frozenset({
+    "write_file",
+    "edit_file",
+    "bash",
+}) | GITHUB_MUTATING_TOOLS
 
 ApprovalHandler = Callable[[str, dict[str, Any]], Awaitable[bool] | bool]
 
@@ -26,7 +31,7 @@ class SandboxPlugin:
 
     def __init__(
         self,
-        mode: SandboxMode = "allow",
+        mode: SandboxMode = "deny",
         approval_handler: ApprovalHandler | None = None,
         mutating_tools: set[str] | frozenset[str] | None = None,
     ):
@@ -44,12 +49,12 @@ class SandboxPlugin:
                 return await next_fn(call)
 
             if self.mode == "deny":
-                return {"denied": True, "error": "SANDBOX_DENIED", **call}
+                return {**call, "denied": True, "error": "SANDBOX_DENIED"}
 
             if self.mode == "ask":
                 approved = await self._check_approval(tool_name, call.get("arguments", {}))
                 if not approved:
-                    return {"denied": True, "error": "ACTION_REJECTED_BY_OPERATOR", **call}
+                    return {**call, "denied": True, "error": "ACTION_REJECTED_BY_OPERATOR"}
                 return await next_fn(call)
 
             return await next_fn(call)

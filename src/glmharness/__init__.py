@@ -24,6 +24,7 @@ from .bus import EventBus
 from .compaction import CompactionPlugin, compact_session
 from .config import (
     HarnessConfig,
+    generate_rpc_token,
     looks_like_snapshot,
     resolve_embed_model_path,
     resolve_model_path,
@@ -45,6 +46,12 @@ from .errors import (
     ProviderUnavailable,
     SessionCorruptError,
     ToolError,
+)
+from .github import (
+    GitHubOptions,
+    GitHubPlugin,
+    GitHubProvider,
+    make_github_tools,
 )
 from .llm import LLM, MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .loop import AgentLoop
@@ -81,6 +88,9 @@ __all__ = [
     "EmbeddingProvider",
     "EmbeddingsPlugin",
     "EventBus",
+    "GitHubOptions",
+    "GitHubPlugin",
+    "GitHubProvider",
     "HarnessConfig",
     "HarnessError",
     "MockLLM",
@@ -111,11 +121,13 @@ __all__ = [
     "compact_session",
     "cosine_similarity",
     "default_skills",
+    "generate_rpc_token",
     "import_skills_from_dir",
     "looks_like_snapshot",
     "make_embed_text_tool",
     "make_fetch_url_tool",
     "make_find_files_tool",
+    "make_github_tools",
     "make_grep_search_tool",
     "make_semantic_rank_tool",
     "make_semantic_similarity_tool",

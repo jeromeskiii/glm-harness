@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -11,6 +12,7 @@ from .compaction import CompactionPlugin
 from .config import HarnessConfig, resolve_embed_model_path, resolve_model_path
 from .context import Context, PluginLoader
 from .embeddings import EmbeddingProvider, EmbeddingsPlugin
+from .github import GitHubOptions, GitHubPlugin, GitHubProvider
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging
 from .loop import AgentLoop
@@ -70,6 +72,7 @@ async def run_repl(
             api_key=config.api_key,
             model=config.model_name,
             max_new_tokens=config.max_new_tokens,
+            temperature=config.temperature,
             timeout_s=config.request_timeout_s,
         )
         provider_name = f"openai-compatible ({config.api_base})"
@@ -104,6 +107,19 @@ async def run_repl(
     embed_path = resolve_embed_model_path(config)
     if embed_path is not None:
         plugins.append(EmbeddingsPlugin(EmbeddingProvider(embed_path)))
+    gh_token = config.github_token or os.environ.get("GITHUB_TOKEN")
+    if config.github_repo or gh_token:
+        owner, repo = None, None
+        if config.github_repo and "/" in config.github_repo:
+            parts = config.github_repo.split("/", 1)
+            owner, repo = parts[0], parts[1]
+        gh_opts = GitHubOptions(
+            token=gh_token,
+            api_base=config.github_api_base or "https://api.github.com",
+            owner=owner,
+            repo=repo,
+        )
+        plugins.append(GitHubPlugin(GitHubProvider(gh_opts)))
     await loader.mount(plugins)
 
     agent = AgentLoop(

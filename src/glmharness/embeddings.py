@@ -24,6 +24,11 @@ from .tools import Tool, ToolRegistry
 _MAX_TEXTS = 32
 _MAX_CANDIDATES = 64
 
+#: Leading components returned per vector in tool output. Full vectors live
+#: inside the provider; replaying 384 floats per text into the conversation
+#: overflows small-context endpoints (observed as HTTP 400 from llama.cpp).
+_EMBED_PREVIEW_COMPONENTS = 8
+
 
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     """Cosine similarity between two equal-length vectors, numpy-free."""
@@ -142,12 +147,25 @@ def make_embed_text_tool(provider: EmbeddingProvider) -> Tool:
         "additionalProperties": False,
     }
 
+    def _round_preview(vector: list[float]) -> list[float]:
+        return [round(value, 4) for value in vector[:_EMBED_PREVIEW_COMPONENTS]]
+
     def handler(args: dict[str, Any]) -> dict[str, Any]:
         texts = [str(item) for item in args["texts"]]
         if len(texts) > _MAX_TEXTS:
             raise ValueError(f"too many texts: {len(texts)} > {_MAX_TEXTS}")
         vectors = provider.embed(texts)
-        return {"dim": len(vectors[0]), "count": len(vectors), "embeddings": vectors}
+        dim = len(vectors[0])
+        return {
+            "dim": dim,
+            "count": len(vectors),
+            "preview": [_round_preview(vector) for vector in vectors],
+            "note": (
+                f"full {dim}-dim vectors omitted from tool output to protect the "
+                "conversation context; use semantic_similarity or semantic_rank "
+                "to compare texts instead"
+            ),
+        }
 
     return Tool(
         name="embed_text",

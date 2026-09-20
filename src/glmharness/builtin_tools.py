@@ -10,8 +10,11 @@ import asyncio
 import fnmatch
 import html
 import ipaddress
+import math
 import os
 import re
+import signal
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -82,6 +85,10 @@ def make_read_file_tool(workspace: Path) -> Tool:
             raise FileNotFoundError(f"file not found: {args['path']}")
         offset = int(args.get("offset", 0))
         limit = int(args.get("limit", 2000))
+        if offset < 0:
+            raise ValueError("offset must be >= 0")
+        if limit < 0:
+            raise ValueError("limit must be >= 0")
         try:
             size = target.stat().st_size
         except OSError as exc:
@@ -232,13 +239,14 @@ def make_bash_tool(workspace: Path) -> Tool:
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
         timeout_s = float(args.get("timeout_s", 30.0))
-        if timeout_s < 0:
-            raise ValueError("timeout_s must be >= 0")
+        if not math.isfinite(timeout_s) or timeout_s < 0:
+            raise ValueError("timeout_s must be a finite number >= 0")
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=cwd_str,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=(os.name == "posix"),
         )
         timed_out = False
         try:
@@ -248,11 +256,26 @@ def make_bash_tool(workspace: Path) -> Tool:
         except TimeoutError:
             timed_out = True
             try:
-                proc.kill()
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
                 await proc.wait()
             except ProcessLookupError:
                 pass
-            stdout_bytes, stderr_bytes = b"", b"execution timed out"
+            stdout_bytes, stderr_bytes = await proc.communicate()
+            stderr_bytes += b"\nexecution timed out"
+        except asyncio.CancelledError:
+            try:
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            await proc.communicate()
+            raise
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")[:_MAX_OUTPUT_BYTES]
         stderr = stderr_bytes.decode("utf-8", errors="replace")[:_MAX_OUTPUT_BYTES]
@@ -302,6 +325,9 @@ def make_find_files_tool(workspace: Path) -> Tool:
 
         entries: list[dict[str, Any]] = []
         workspace_resolved = workspace.resolve()
+
+        if file_type not in {"file", "dir", "any"}:
+            raise ValueError("file_type must be one of: file, dir, any")
 
         for root, dirs, files in os.walk(target):
             dirs[:] = [d for d in dirs if d not in _DEFAULT_IGNORED_DIRS]
@@ -541,16 +567,132 @@ _BLOCKED_HOSTNAMES = {"localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254", ":
 
 def is_blocked_host(host: str) -> bool:
     """Check if host is a local / private / loopback IP to mitigate SSRF."""
-    host_clean = host.split(":")[0].strip().lower()
+    host_clean = host.strip().lower().rstrip(".")
+    if host_clean.startswith("[") and host_clean.endswith("]"):
+        host_clean = host_clean[1:-1]
     if host_clean in _BLOCKED_HOSTNAMES or host_clean.endswith(".local"):
         return True
     try:
         ip = ipaddress.ip_address(host_clean)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        if not ip.is_global:
             return True
     except ValueError:
         pass
     return False
+
+
+def _validate_public_target(parsed: urllib.parse.ParseResult) -> None:
+    """Reject credentials, special-use hosts, and DNS names resolving privately."""
+    if parsed.hostname is None:
+        raise ValueError("invalid URL: missing host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL credentials are not allowed")
+    try:
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("invalid URL port") from exc
+    hostname = parsed.hostname.rstrip(".").lower()
+    if is_blocked_host(hostname):
+        raise PermissionError(f"access denied: blocked target address '{hostname}'")
+    try:
+        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"failed to resolve URL host '{hostname}': {exc}") from exc
+    if not addresses:
+        raise ValueError(f"failed to resolve URL host '{hostname}'")
+    for _, _, _, _, sockaddr in addresses:
+        address = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError(f"invalid resolved address for '{hostname}'") from exc
+        if not ip.is_global:
+            raise PermissionError(f"access denied: host '{hostname}' resolves to blocked address '{ip}'")
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        parsed = urllib.parse.urlparse(newurl)
+        if parsed.scheme.lower() not in ("http", "https"):
+            raise PermissionError("access denied: redirects must remain HTTP or HTTPS")
+        _validate_public_target(parsed)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class _PinnedAddrOpener:
+    """Open ``req`` after re-resolving the URL's hostname against ``pin_ip``.
+
+    DNS rebinding defeats a "validate the host, then connect" check: the
+    resolver is consulted twice with different results. This opener bypasses
+    that window by resolving once during validation and forcing the connect
+    to the IP that was already vetted. The ``Host`` header is preserved so
+    virtual-host routing still works.
+    """
+
+    def __init__(self, pin_ip: str, pin_port: int, pin_scheme: str) -> None:
+        self.pin_ip = pin_ip
+        self.pin_port = pin_port
+        self.pin_scheme = pin_scheme
+
+    def open(self, req: urllib.request.Request, timeout: float = 15.0) -> Any:
+        from urllib.request import (
+            Request as _Req,
+        )
+
+        pinned_url = urllib.parse.urlunparse(
+            (
+                self.pin_scheme,
+                f"{self.pin_ip}:{self.pin_port}",
+                req.selector or "/",
+                "",
+                "",
+                "",
+            )
+        )
+        pinned_req = _Req(
+            pinned_url,
+            data=req.data,
+            headers=req.headers,
+            method=req.get_method(),
+        )
+        opener = urllib.request.build_opener(_SafeRedirectHandler(), urllib.request.ProxyHandler({}))
+        return opener.open(pinned_req, timeout=timeout)
+
+
+def _first_global_address(hostname: str, port: int) -> tuple[str, int]:
+    """Return the first globally-routable IP for ``hostname``.
+
+    Raises :class:`ValueError` if no globally-routable address is found or
+    the host cannot be resolved. Callers should treat this as a hard SSRF
+    guard: the IP returned is the only one trusted to be safe to connect to.
+    """
+    try:
+        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"failed to resolve URL host '{hostname}': {exc}") from exc
+    if not addresses:
+        raise ValueError(f"failed to resolve URL host '{hostname}'")
+    for _, _, _, _, sockaddr in addresses:
+        address = sockaddr[0]
+        if not isinstance(address, str):
+            raise ValueError(f"invalid resolved address for '{hostname}'")
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError(f"invalid resolved address for '{hostname}'") from exc
+        if ip.is_global:
+            return address, port
+    raise PermissionError(
+        f"access denied: host '{hostname}' has no globally-routable address"
+    )
 
 
 def make_fetch_url_tool() -> Tool:
@@ -578,19 +720,28 @@ def make_fetch_url_tool() -> Tool:
             raise ValueError(f"unsupported URL scheme '{parsed.scheme}'; only http and https are allowed")
         if not parsed.netloc:
             raise ValueError(f"invalid URL: missing host in '{raw_url}'")
-        if is_blocked_host(parsed.netloc):
-            raise PermissionError(f"access denied: blocked target address '{parsed.netloc}'")
+        _validate_public_target(parsed)
 
         timeout_s = float(args.get("timeout_s", 15.0))
         max_chars = max(100, int(args.get("max_chars", 50_000)))
 
         def _do_fetch() -> dict[str, Any]:
+            # Resolve once to a globally-routable IP and pin the connect to it.
+            # Without this, the resolver could be consulted again between
+            # validation and connect (classic DNS rebinding) and return a
+            # private address. The Host header is preserved so virtual-host
+            # routing continues to work.
+            port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+            hostname = parsed.hostname
+            assert hostname is not None  # _validate_public_target rejects None
+            pin_ip, pin_port = _first_global_address(hostname, port)
             req = urllib.request.Request(
                 raw_url,
                 headers={"User-Agent": "Mozilla/5.0 (compatible; GLM-5.3-Flash-Harness/0.4.2)"},
             )
+            opener = _PinnedAddrOpener(pin_ip, pin_port, parsed.scheme.lower())
             try:
-                with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                with opener.open(req, timeout=timeout_s) as resp:
                     status_code = getattr(resp, "code", 200) or getattr(resp, "status", 200)
                     content_type = str(resp.headers.get("Content-Type", "text/plain"))
                     raw_bytes = resp.read(10 * 1024 * 1024)
@@ -635,12 +786,12 @@ class BuiltinToolsPlugin:
 
     def __init__(
         self,
-        workspace: Path | None = None,
+        workspace: str | Path | None = None,
         enable_bash: bool = True,
         enable_fetch_url: bool = True,
         enable_stop_slop: bool = True,
     ):
-        self.workspace = (workspace or Path.cwd()).resolve()
+        self.workspace = (Path(workspace) if workspace else Path.cwd()).resolve()
         self.enable_bash = enable_bash
         self.enable_fetch_url = enable_fetch_url
         self.enable_stop_slop = enable_stop_slop

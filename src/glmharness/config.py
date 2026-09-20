@@ -13,6 +13,7 @@ fails at startup with a clear message — never mid-turn.
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,6 +44,7 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "API_BASE": ("api_base", "str", None),
     "API_KEY": ("api_key", "str", None),
     "MODEL": ("model_name", "str", None),
+    "TEMPERATURE": ("temperature", "float", None),
     "COMPACTION_THRESHOLD": ("compaction_threshold", "int", None),
     "COMPACTION_KEEP_ROUNDS": ("compaction_keep_rounds", "int", None),
     "COMPACTION_STRATEGY": ("compaction_strategy", "str", ("summarize", "truncate")),
@@ -53,6 +55,12 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "TASK_RISK": ("task_risk", "str", ("low", "medium", "high", "critical")),
     "EMBED_MODEL_PATH": ("embed_model_path", "path", None),
     "RPC_TOKEN": ("rpc_token", "str", None),
+    "RPC_ALLOW_MUTATING": ("rpc_allow_mutating", "bool", None),
+    "RPC_AUTO_TOKEN": ("rpc_auto_token", "bool", None),
+    "STATE_DIR": ("state_dir", "path", None),
+    "GITHUB_TOKEN": ("github_token", "str", None),
+    "GITHUB_REPO": ("github_repo", "str", None),
+    "GITHUB_API_BASE": ("github_api_base", "str", None),
 }
 
 
@@ -70,6 +78,9 @@ class HarnessConfig:
     api_base: str | None = None
     api_key: str | None = None
     model_name: str = "GLM-5.3-Flash"
+    # sampling temperature for remote endpoints (local TransformersGLM uses its
+    # own reasoning-budget sampling); lower values stabilize tool-calling.
+    temperature: float = 0.7
 
     # session
     session_path: Path | None = None
@@ -97,6 +108,11 @@ class HarnessConfig:
     workspace_dir: Path | None = None
     # Mutating tools are denied unless the operator explicitly opts in.
     sandbox_mode: str = "deny"
+    # Built-in tool toggles (CLI surface). Default to True to keep the
+    # legacy behavior; the CLI prints a stderr warning whenever bash is on
+    # so the operator knows the harness can run shell commands.
+    enable_bash: bool = True
+    enable_fetch_url: bool = True
 
     # compaction & replay
     compaction_threshold: int = 0
@@ -113,10 +129,27 @@ class HarnessConfig:
     # embeddings (optional; semantic tools mount only when a model resolves)
     embed_model_path: Path | None = None
 
-    # stdio JSON-RPC server auth: when set, the ``initialize`` RPC must carry
-    # this bearer token. Stdio is loopback and trusted by default; only set
-    # this when handing the server to a less-trusted peer.
+    # stdio JSON-RPC server auth: when ``rpc_token`` is unset and ``rpc_auto_token``
+    # is true (default), the server generates a random per-process token and prints
+    # it to stderr exactly once. Set ``rpc_token`` to share a token with a peer;
+    # set ``rpc_auto_token=False`` only when the peer is trusted-by-same-UID
+    # (e.g. an IDE extension launching the server itself). Stdio is loopback,
+    # but other local processes with the same UID can still write to the fd.
     rpc_token: str | None = None
+    rpc_auto_token: bool = True
+    # Allow mutating tool calls (bash, write_file, edit_file, github_write_file,
+    # github_create_*, github_add_issue_comment) over the RPC. Default False
+    # so a compromised peer cannot escalate to local code execution or remote
+    # commit/push. Set True only when the peer is fully trusted.
+    rpc_allow_mutating: bool = False
+    # Root directory under which session/import RPC may read ``logPath`` files.
+    # Defaults to None which means only relative paths are accepted.
+    state_dir: Path | None = None
+
+    # GitHub seam: when token or repo is configured, GitHubPlugin mounts tools
+    github_token: str | None = None
+    github_repo: str | None = None
+    github_api_base: str | None = None
 
     # runtime (not from env)
     prompt: str = ""
@@ -134,6 +167,10 @@ class HarnessConfig:
         config = cls()
         for name, (attr, kind, allowed) in _ENV_MAP.items():
             raw = os.environ.get(_ENV_PREFIX + name)
+            if raw is None and name.startswith("GITHUB_"):
+                # Conventional bare names (GITHUB_TOKEN, GITHUB_REPO,
+                # GITHUB_API_BASE) are honored alongside GLMH_GITHUB_*.
+                raw = os.environ.get(name)
             if raw is None or raw == "":
                 continue
             try:
@@ -191,6 +228,8 @@ class HarnessConfig:
             raise ConfigError("retry_jitter must be in [0, 1)")
         if self.retry_base_delay_s <= 0 or self.retry_max_delay_s < self.retry_base_delay_s:
             raise ConfigError("retry_base_delay_s must be > 0 and <= retry_max_delay_s")
+        if not (0.0 <= self.temperature <= 2.0):
+            raise ConfigError(f"temperature must be within [0.0, 2.0], got {self.temperature!r}")
         if self.model_path is not None and not self.model_path.is_dir():
             raise ConfigError(f"model path is not a directory: {self.model_path}")
         if self.sandbox_mode not in ("allow", "deny", "ask"):
@@ -203,12 +242,22 @@ class HarnessConfig:
             raise ConfigError(f"skills path is not a directory: {self.skills_dir}")
         if self.embed_model_path is not None and not self.embed_model_path.is_dir():
             raise ConfigError(f"embedding model path is not a directory: {self.embed_model_path}")
+        if self.github_repo is not None and "/" not in self.github_repo:
+            raise ConfigError(f"github_repo must be in 'owner/name' format, got {self.github_repo!r}")
+        if self.state_dir is not None and not self.state_dir.is_dir():
+            raise ConfigError(f"state_dir path is not a directory: {self.state_dir}")
 
     def retry_delay(self, attempt: int) -> float:
-        """Exponential backoff with jitter for the given 1-based attempt."""
+        """Exponential backoff with jitter for the given 1-based attempt.
+
+        Jitter uses the OS CSPRNG (``secrets``) so concurrent retriers do not
+        wake at the same instant; a deterministic LCG would amplify retry
+        storms against the same provider.
+        """
         delay = min(self.retry_base_delay_s * (2 ** (attempt - 1)), self.retry_max_delay_s)
         if self.retry_jitter:
-            delay *= 1 + self.retry_jitter * (2 * _hash_fraction(attempt) - 1)
+            spread = 2 * secrets.randbelow(2**31) / (2**31) - 1
+            delay *= 1 + self.retry_jitter * spread
         return delay
 
     def unknown_env_keys(self) -> list[str]:
@@ -259,7 +308,12 @@ def resolve_embed_model_path(config: HarnessConfig, *, cwd: Path | None = None) 
     return None
 
 
-def _hash_fraction(seed: int) -> float:
-    """Deterministic pseudo-random fraction in [0, 1) — stable for tests."""
-    x = (seed * 1103515245 + 12345) % (2**31)
-    return x / (2**31)
+def generate_rpc_token() -> str:
+    """Generate a per-process bearer token for the JSON-RPC stdio server.
+
+    Uses ``secrets.token_urlsafe`` so an unprivileged observer of the
+    surrounding process state cannot predict it. The CLI prints this to
+    stderr exactly once when ``--serve`` is invoked without an explicit
+    ``rpc_token``.
+    """
+    return secrets.token_urlsafe(24)

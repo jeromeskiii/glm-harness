@@ -43,11 +43,21 @@ def compact_session(
     if threshold <= 0:
         return {"compacted": False, "dropped_count": 0, "summary": None, "upto": None}
 
-    # Identify all active surface events
+    latest_watermark = max(
+        (int(ev.data["upto"]) for ev in session_log.events
+         if ev.type in ("session/compacted", "compacted") and isinstance(ev.data.get("upto"), int)),
+        default=-1,
+    )
+    # Identify only surface events that have not already been compacted.
     surface_events: list[tuple[int, str, str]] = []
     total_tokens = 0
     for idx, ev in enumerate(session_log.events):
-        if ev.type in ("user/message", "assistant/message", "tool/result", "system/message"):
+        if idx > latest_watermark and ev.type in (
+            "user/message",
+            "assistant/message",
+            "tool/result",
+            "system/message",
+        ):
             content = str(ev.data.get("content", ""))
             tokens = estimate_tokens(content)
             total_tokens += tokens
@@ -131,7 +141,7 @@ class CompactionPlugin:
 
     def apply(self, ctx: Context) -> None:
         self.ctx = ctx
-        ctx.events.on("agent/request", self._on_agent_request)
+        ctx.on("agent/request", self._on_agent_request)
 
     async def _on_agent_request(
         self,

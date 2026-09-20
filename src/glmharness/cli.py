@@ -24,6 +24,7 @@ import argparse
 import asyncio
 import dataclasses
 import json
+import os
 import signal
 import sys
 from collections.abc import Sequence
@@ -42,6 +43,7 @@ from .config import (
 from .context import Context, PluginLoader
 from .embeddings import EmbeddingProvider, EmbeddingsPlugin
 from .errors import ConfigError, HarnessError, ProviderError
+from .github import GitHubOptions, GitHubPlugin, GitHubProvider
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
@@ -61,6 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run GLM-5.3-Flash through the H1 plugin harness.",
     )
     parser.add_argument("prompt", nargs="?", help="one-shot user prompt (else prompts)")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="sampling temperature for remote endpoints (default: $GLMH_TEMPERATURE or 0.7)",
+    )
     parser.add_argument(
         "--model-path",
         type=Path,
@@ -118,6 +126,30 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("allow", "deny", "ask"),
         default=None,
         help="sandbox policy for mutating tools (allow, deny, ask; default: deny)",
+    )
+    parser.add_argument(
+        "--enable-bash",
+        dest="enable_bash",
+        action="store_true",
+        default=None,
+        help=(
+            "register the bash tool (default: enabled). The bash tool runs "
+            "arbitrary shell commands inside the workspace at the operator's "
+            "UID — pass --no-enable-bash to omit it."
+        ),
+    )
+    parser.add_argument(
+        "--no-enable-bash",
+        dest="enable_bash",
+        action="store_false",
+        help="do not register the bash tool (overrides --enable-bash).",
+    )
+    parser.add_argument(
+        "--no-enable-fetch-url",
+        dest="enable_fetch_url",
+        action="store_false",
+        default=None,
+        help="do not register the fetch_url tool (default: enabled).",
     )
     parser.add_argument(
         "--api-base",
@@ -235,7 +267,38 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "bearer token required by the stdio JSON-RPC server's initialize "
-            "RPC; default: $GLMH_RPC_TOKEN. Disabled when unset."
+            "RPC; default: $GLMH_RPC_TOKEN. When unset, a per-process token is "
+            "auto-generated and printed to stderr exactly once (set "
+            "--rpc-auto-token=false to disable)."
+        ),
+    )
+    parser.add_argument(
+        "--rpc-auto-token",
+        choices=("true", "false"),
+        default=None,
+        help=(
+            "whether to auto-generate an RPC token when --rpc-token is unset "
+            "(default: true). Set false to run --serve unauthenticated."
+        ),
+    )
+    parser.add_argument(
+        "--rpc-allow-mutating",
+        action="store_true",
+        default=None,
+        help=(
+            "allow mutating tool calls (bash, write_file, edit_file, "
+            "github_write_file, github_create_*) over the JSON-RPC server. "
+            "Default: false (denied)."
+        ),
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        default=None,
+        help=(
+            "root directory under which the JSON-RPC server may read "
+            "session/import.logPath files. Relative paths only; absent this "
+            "setting, logPath imports are refused."
         ),
     )
     parser.add_argument(
@@ -250,6 +313,24 @@ def build_parser() -> argparse.ArgumentParser:
         metavar=("TEXT_A", "TEXT_B"),
         default=None,
         help="print cosine similarity between two texts, then exit",
+    )
+    parser.add_argument(
+        "--github",
+        type=str,
+        default=None,
+        help="scope GitHub tools to repo (owner/name format, e.g. octocat/Hello-World)",
+    )
+    parser.add_argument(
+        "--github-token",
+        type=str,
+        default=None,
+        help="GitHub personal access token / bearer token (defaults to $GITHUB_TOKEN or $GLMH_GITHUB_TOKEN)",
+    )
+    parser.add_argument(
+        "--github-api-base",
+        type=str,
+        default=None,
+        help="GitHub REST API base URL (default: https://api.github.com)",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -270,9 +351,12 @@ _CLI_FIELD_FOR = {
     "log_level": "log_level",
     "workspace": "workspace_dir",
     "sandbox": "sandbox_mode",
+    "enable_bash": "enable_bash",
+    "enable_fetch_url": "enable_fetch_url",
     "api_base": "api_base",
     "api_key": "api_key",
     "model": "model_name",
+    "temperature": "temperature",
     "compaction_threshold": "compaction_threshold",
     "compaction_keep_rounds": "compaction_keep_rounds",
     "compaction_strategy": "compaction_strategy",
@@ -283,6 +367,12 @@ _CLI_FIELD_FOR = {
     "task_risk": "task_risk",
     "embed_model_path": "embed_model_path",
     "rpc_token": "rpc_token",
+    "rpc_auto_token": "rpc_auto_token",
+    "rpc_allow_mutating": "rpc_allow_mutating",
+    "state_dir": "state_dir",
+    "github": "github_repo",
+    "github_token": "github_token",
+    "github_api_base": "github_api_base",
 }
 
 
@@ -300,6 +390,12 @@ def _merge_config(args: argparse.Namespace) -> HarnessConfig:
         overrides["tool_allowlist"] = tuple(
             part.strip() for part in str(args.tool_allowlist).split(",") if part.strip()
         )
+    # ``--rpc-auto-token`` is a tri-state choice (true|false|none). Coerce
+    # only when the operator passed it explicitly; otherwise inherit the
+    # config default (``True``).
+    rpc_auto = getattr(args, "rpc_auto_token", None)
+    if rpc_auto is not None:
+        overrides["rpc_auto_token"] = rpc_auto == "true"
     # ``dataclasses.replace`` keeps the static-type contract: every key is
     # validated against the field declaration rather than routed through
     # ``Any`` like ``HarnessConfig(**dict)`` would.
@@ -347,6 +443,7 @@ async def run(config: HarnessConfig) -> int:
             api_key=config.api_key,
             model=config.model_name,
             max_new_tokens=config.max_new_tokens,
+            temperature=config.temperature,
             timeout_s=config.request_timeout_s,
         )
     else:
@@ -375,7 +472,11 @@ async def run(config: HarnessConfig) -> int:
         loader = PluginLoader(ctx)
         plugins: list[Any] = [
             BasePlugin(sessions, tools),
-            BuiltinToolsPlugin(config.workspace_dir),
+            BuiltinToolsPlugin(
+                config.workspace_dir,
+                enable_bash=config.enable_bash,
+                enable_fetch_url=config.enable_fetch_url,
+            ),
             SandboxPlugin(mode=config.sandbox_mode),  # type: ignore[arg-type]
             SafetyPlugin(config.tool_allowlist),
             CompactionPlugin(
@@ -389,9 +490,29 @@ async def run(config: HarnessConfig) -> int:
                 default_risk=RiskLevel.from_str(config.task_risk),
             ),
         ]
+        if config.enable_bash:
+            sys.stderr.write(
+                "[glmharness] WARNING: the 'bash' tool is enabled — it executes "
+                "arbitrary shell commands inside the workspace at your UID. "
+                "Pass --no-enable-bash to disable it.\n"
+            )
+            sys.stderr.flush()
         embed_path = resolve_embed_model_path(config)
         if embed_path is not None:
             plugins.append(EmbeddingsPlugin(EmbeddingProvider(embed_path)))
+        gh_token = config.github_token or os.environ.get("GITHUB_TOKEN")
+        if config.github_repo or gh_token:
+            owner, repo = None, None
+            if config.github_repo and "/" in config.github_repo:
+                parts = config.github_repo.split("/", 1)
+                owner, repo = parts[0], parts[1]
+            gh_opts = GitHubOptions(
+                token=gh_token,
+                api_base=config.github_api_base or "https://api.github.com",
+                owner=owner,
+                repo=repo,
+            )
+            plugins.append(GitHubPlugin(GitHubProvider(gh_opts)))
         await loader.mount(plugins)
         agent = AgentLoop(
             ctx,
@@ -507,6 +628,11 @@ def doctor(config: HarnessConfig) -> int:
     ws = (config.workspace_dir or Path.cwd()).resolve()
     rows.append(("workspace", str(ws), ws.is_dir()))
     rows.append(("sandbox", config.sandbox_mode, True))
+    gh_token = config.github_token or os.environ.get("GITHUB_TOKEN")
+    if config.github_repo or gh_token:
+        scope = config.github_repo or "<unscoped>"
+        auth_status = "authenticated" if gh_token else "unauthenticated"
+        rows.append(("github", f"{scope} ({auth_status})", True))
     failed = False
     for name, detail, ok in rows:
         mark = "ok" if ok else "FAIL"

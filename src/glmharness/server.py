@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import os
 import sys
 import time
 import uuid
@@ -18,9 +19,10 @@ from typing import Any, TextIO, cast
 from . import __version__
 from .builtin_tools import BuiltinToolsPlugin
 from .compaction import CompactionPlugin, compact_session
-from .config import HarnessConfig, resolve_embed_model_path, resolve_model_path
+from .config import HarnessConfig, generate_rpc_token, resolve_embed_model_path, resolve_model_path
 from .context import Context, PluginLoader
 from .embeddings import EmbeddingProvider, EmbeddingsPlugin
+from .github import GITHUB_MUTATING_TOOLS, GitHubOptions, GitHubPlugin, GitHubProvider
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
@@ -29,6 +31,17 @@ from .sandbox import SandboxPlugin
 from .session import SessionLog
 from .skills import RiskLevel, SkillCatalog, SkillsPlugin
 from .tools import ToolRegistry
+
+#: Tools that are reachable through ``tools/execute`` only when the operator
+#: has explicitly enabled ``rpc_allow_mutating``. These are the tools that
+#: would let a same-UID peer escalate to local code execution or remote
+#: commits, so they are denied by default over RPC. The local CLI loop is
+#: unaffected; this gate applies only to JSON-RPC requests.
+_RPC_MUTATING_TOOLS: frozenset[str] = frozenset({
+    "bash",
+    "write_file",
+    "edit_file",
+}) | GITHUB_MUTATING_TOOLS
 
 _SERVER_CAPABILITIES = {
     "streaming": True,
@@ -65,9 +78,20 @@ class ProtocolServer:
         self.tools: ToolRegistry | None = None
         self.llm: Any = None
         self.embedding_path: Path | None = None
-        # ``initialize`` flips this once; the configured token, if any, was
-        # verified against the request at that moment. Empty string disables.
-        self._auth_ok: bool = config.rpc_token is None
+        self.github_mounted: bool = False
+        # When ``rpc_token`` is unset and ``rpc_auto_token`` is true (the
+        # default), the server generates a per-process bearer token via the
+        # OS CSPRNG and prints it to stderr exactly once. Stdio is loopback
+        # but a same-UID peer can still write to the fd, so authentication
+        # is no longer opt-in. To deliberately run unauthenticated, set
+        # ``rpc_token=""`` and ``rpc_auto_token=False`` together.
+        if config.rpc_token is None and config.rpc_auto_token:
+            self._auto_token: str | None = generate_rpc_token()
+        else:
+            self._auto_token = None
+        # ``initialize`` flips this once; the configured (or auto-generated)
+        # token, if any, was verified against the request at that moment.
+        self._auth_ok: bool = (config.rpc_token is None and not config.rpc_auto_token)
 
     def _write_frame(self, frame: dict[str, Any]) -> None:
         raw = json.dumps(frame, ensure_ascii=False)
@@ -100,6 +124,7 @@ class ProtocolServer:
                 api_key=self.config.api_key,
                 model=self.config.model_name,
                 max_new_tokens=self.config.max_new_tokens,
+                temperature=self.config.temperature,
                 timeout_s=self.config.request_timeout_s,
             )
         else:
@@ -113,7 +138,11 @@ class ProtocolServer:
         loader = PluginLoader(self.ctx)
         plugins: list[Any] = [
             BasePlugin(initial_log, self.tools),
-            BuiltinToolsPlugin(self.config.workspace_dir),
+            BuiltinToolsPlugin(
+                self.config.workspace_dir,
+                enable_bash=self.config.enable_bash,
+                enable_fetch_url=self.config.enable_fetch_url,
+            ),
             SandboxPlugin(mode=self.config.sandbox_mode),  # type: ignore[arg-type]
             SafetyPlugin(self.config.tool_allowlist),
             CompactionPlugin(
@@ -130,7 +159,68 @@ class ProtocolServer:
         self.embedding_path = resolve_embed_model_path(self.config)
         if self.embedding_path is not None:
             plugins.append(EmbeddingsPlugin(EmbeddingProvider(self.embedding_path)))
+        gh_token = self.config.github_token or os.environ.get("GITHUB_TOKEN")
+        self.github_mounted = False
+        if self.config.github_repo or gh_token:
+            owner, repo = None, None
+            if self.config.github_repo and "/" in self.config.github_repo:
+                parts = self.config.github_repo.split("/", 1)
+                owner, repo = parts[0], parts[1]
+            gh_opts = GitHubOptions(
+                token=gh_token,
+                api_base=self.config.github_api_base or "https://api.github.com",
+                owner=owner,
+                repo=repo,
+            )
+            plugins.append(GitHubPlugin(GitHubProvider(gh_opts)))
+            self.github_mounted = True
         await loader.mount(plugins)
+
+    @property
+    def auto_token(self) -> str | None:
+        """The per-process auto-generated bearer token, or ``None``.
+
+        ``None`` when the operator supplies ``rpc_token`` explicitly or
+        disabled auto tokens with ``rpc_auto_token=False``.
+        """
+        return self._auto_token
+
+    @property
+    def _effective_rpc_token(self) -> str | None:
+        """The bearer token required by ``initialize``.
+
+        Prefers the operator-supplied ``rpc_token``; falls back to the
+        per-process auto-generated token when ``rpc_auto_token`` is enabled.
+        ``None`` only when the operator has explicitly opted out of auth
+        (``rpc_token is None`` and ``rpc_auto_token is False``).
+        """
+        if self.config.rpc_token is not None:
+            return self.config.rpc_token
+        return self._auto_token
+
+    def _require_state_relative(self, raw: str) -> Path:
+        """Resolve a caller-supplied path against ``state_dir``.
+
+        Rejects absolute paths and any path that escapes ``state_dir`` after
+        resolution. Without this, an authenticated peer could ask the server
+        to ingest ``/etc/passwd`` or any file the operator can read.
+        """
+        if self.config.state_dir is None:
+            raise PermissionError(
+                "logPath imports require state_dir to be configured on the server"
+            )
+        state_root = self.config.state_dir.resolve()
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            raise PermissionError(
+                f"logPath must be relative to state_dir ({state_root}); got absolute path"
+            )
+        resolved = (state_root / candidate).resolve()
+        if resolved != state_root and state_root not in resolved.parents:
+            raise PermissionError(
+                f"logPath '{raw}' escapes state_dir ({state_root})"
+            )
+        return resolved
 
     async def handle_request(self, frame: dict[str, Any]) -> None:
         req_id: object = frame.get("id")
@@ -142,15 +232,16 @@ class ProtocolServer:
             self._error(req_id, -32600, "Invalid Request: method must be string")
             return
 
-        # Auth gate: when a token is configured, every method except
-        # ``initialize`` (which itself authenticates the peer) is rejected
-        # until a successful ``initialize`` was processed.
-        if self.config.rpc_token is not None and not self._auth_ok and method != "initialize":
+        # Auth gate: when a token is configured (or auto-generated), every
+        # method except ``initialize`` (which itself authenticates the peer)
+        # is rejected until a successful ``initialize`` was processed.
+        effective_token = self._effective_rpc_token
+        if effective_token is not None and not self._auth_ok and method != "initialize":
             self._error(req_id, -32001, "Unauthorized: send initialize first")
             return
 
         if method == "initialize":
-            expected = self.config.rpc_token
+            expected = effective_token
             if expected is not None:
                 header_token = str(params.get("authToken", ""))
                 # hmac.compare_digest keeps the comparison constant-time so a
@@ -161,7 +252,9 @@ class ProtocolServer:
                 self._auth_ok = True
             capabilities = dict(_SERVER_CAPABILITIES)
             capabilities["embeddings"] = self.embedding_path is not None
+            capabilities["github"] = self.github_mounted
             capabilities["auth"] = expected is not None
+            capabilities["rpcAllowMutating"] = self.config.rpc_allow_mutating
             self._success(
                 req_id,
                 {
@@ -208,7 +301,12 @@ class ProtocolServer:
                 imported += session_log.import_projection(cast(list[dict[str, Any]], proj_raw))
             log_path_raw: object = params.get("logPath")
             if isinstance(log_path_raw, str):
-                imported += session_log.import_log(log_path_raw)
+                try:
+                    safe_path = self._require_state_relative(log_path_raw)
+                except PermissionError as exc:
+                    self._error(req_id, -32003, f"Forbidden: {exc}")
+                    return
+                imported += session_log.import_log(safe_path)
             self._success(req_id, {"sessionId": session_id, "imported": imported})
             return
 
@@ -238,6 +336,19 @@ class ProtocolServer:
         if method == "tools/execute":
             assert self.tools is not None
             name = str(params.get("name", ""))
+            if (
+                name in _RPC_MUTATING_TOOLS
+                and not self.config.rpc_allow_mutating
+            ):
+                self._error(
+                    req_id,
+                    -32004,
+                    (
+                        f"Forbidden: tool '{name}' is mutating and "
+                        "rpc_allow_mutating is disabled"
+                    ),
+                )
+                return
             args = cast(dict[str, Any], params.get("arguments") or {})
             res = await self.tools.execute(name, args)
             self._success(req_id, res)
@@ -409,4 +520,14 @@ class ProtocolServer:
 async def run_server(config: HarnessConfig) -> int:
     configure_logging(fmt=config.log_format, level=config.log_level)
     server = ProtocolServer(config)
+    # When the server is running with an auto-generated bearer token, print
+    # it to stderr exactly once so the operator can hand it to the peer.
+    # We use stderr (not stdout) so the JSON-RPC framing on stdout stays
+    # parseable for the peer.
+    auto_token = server.auto_token
+    if auto_token is not None:
+        sys.stderr.write(
+            f"[glmharness] auto-generated RPC token: {auto_token}\n"
+        )
+        sys.stderr.flush()
     return await server.serve()

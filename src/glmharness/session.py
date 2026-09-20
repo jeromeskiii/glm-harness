@@ -161,7 +161,7 @@ class SessionLog:
                 imported += self.import_projection([rec])
         return imported
 
-    def derive_messages(self) -> list[dict[str, str]]:
+    def derive_messages(self) -> list[dict[str, Any]]:
         """Project surface events into provider-visible chat messages with compaction support."""
         watermark_idx = -1
         summary_text: str | None = None
@@ -188,7 +188,14 @@ class SessionLog:
             elif event.type == "assistant/message":
                 messages.append({"role": "assistant", "content": str(event.data.get("content", ""))})
             elif event.type == "tool/result":
-                messages.append({"role": "tool", "content": str(event.data.get("content", ""))})
+                message: dict[str, Any] = {
+                    "role": "tool",
+                    "content": str(event.data.get("content", "")),
+                }
+                call_id = event.data.get("call_id")
+                if isinstance(call_id, str) and call_id:
+                    message["tool_call_id"] = call_id
+                messages.append(message)
         return messages
 
     def tail(self, count: int = 10) -> list[SessionEvent]:

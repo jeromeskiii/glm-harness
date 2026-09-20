@@ -572,6 +572,54 @@ def default_skills() -> list[Skill]:
             min_risk=RiskLevel.LOW,
             max_risk=RiskLevel.CRITICAL,
         ),
+        Skill(
+            name="github-agent",
+            description="Inspect GitHub repositories, manage issues, review PRs, and commit changes.",
+            tools=frozenset(
+                {
+                    "github_get_repo",
+                    "github_list_issues",
+                    "github_get_issue",
+                    "github_list_issue_comments",
+                    "github_get_file",
+                    "github_list_pull_requests",
+                    "github_get_pull_request",
+                    "github_list_pull_request_files",
+                    "github_list_branches",
+                    "github_list_commits",
+                    "github_get_commit",
+                    "github_search_code",
+                    "github_search_issues",
+                    "github_write_file",
+                    "github_create_issue",
+                    "github_create_pull_request",
+                    "github_create_branch",
+                    "github_add_issue_comment",
+                }
+            ),
+            triggers=frozenset(
+                {
+                    "github",
+                    "repo",
+                    "repository",
+                    "issue",
+                    "pull request",
+                    "pr",
+                    "commit",
+                    "branch",
+                }
+            ),
+            capabilities=frozenset({"github", "coding", "ops"}),
+            tags=frozenset({"github", "vcs"}),
+            guidance=(
+                "Operate within the configured repository scope. For read queries, use "
+                "github_get_repo, github_list_issues, or github_get_pull_request. Mutating "
+                "operations (writing files, creating branches, opening issues or PRs) require "
+                "approval and follow sandbox policy."
+            ),
+            min_risk=RiskLevel.LOW,
+            max_risk=RiskLevel.CRITICAL,
+        ),
     ]
 
 

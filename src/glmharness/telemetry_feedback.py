@@ -40,7 +40,12 @@ def on_feedback(listener: Listener) -> Callable[[], None]:
 def record_feedback(kind: str, message: str, **detail: Any) -> None:
     """Emit a structured feedback event. Fails silently, always."""
     try:
-        get_logger().info("feedback", extra={"kind": kind, "message": message, **detail})
+        # ``message`` is a reserved LogRecord key in the stdlib logger; using
+        # it in ``extra`` raises KeyError (swallowed below), so the message
+        # rides in the log line itself and only ``kind``/``detail`` go to extras.
+        get_logger().info(
+            "feedback %s: %s", kind, message, extra={"kind": kind, "detail": detail}
+        )
         for listener in list(_listeners):
             listener(kind, {"message": message, **detail})
     except Exception:

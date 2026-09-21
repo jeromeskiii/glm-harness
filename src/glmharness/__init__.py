@@ -77,10 +77,12 @@ from .stop_slop import (
     make_stop_slop_rewrite_tool,
     make_stop_slop_rules_tool,
 )
+from .telemetry_feedback import FEEDBACK_KINDS, on_feedback, record_feedback
 from .tools import Tool, ToolRegistry, parse_tool_calls, validate_tool_arguments
 from .verdict import Consequence, VerificationRun, judge
 
 __all__ = [
+    "FEEDBACK_KINDS",
     "LLM",
     "AgentLoop",
     "BasePlugin",
@@ -141,7 +143,9 @@ __all__ = [
     "make_stop_slop_examples_tool",
     "make_stop_slop_rewrite_tool",
     "make_stop_slop_rules_tool",
+    "on_feedback",
     "parse_tool_calls",
+    "record_feedback",
     "resolve_embed_model_path",
     "resolve_model_path",
     "resolve_safe_path",

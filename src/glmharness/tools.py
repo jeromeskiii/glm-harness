@@ -29,6 +29,7 @@ from .artifacts.flow_step_tool import (
 from .artifacts.flow_types import Tool
 from .context import Context
 from .logging import get_logger
+from .telemetry_feedback import record_feedback
 from .verdict import Consequence, VerificationRun
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL | re.IGNORECASE)
@@ -282,6 +283,7 @@ class ToolRegistry:
             )
             return self._finish(call, {"ok": False, "error": "TOOL_TIMEOUT"})
         except Exception as exc:
+            record_feedback("gap", f"tool {name} failed: {type(exc).__name__}")
             get_logger().warning(
                 "tool failed",
                 extra={"tool": name, "error": type(exc).__name__},

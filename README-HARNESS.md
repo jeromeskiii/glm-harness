@@ -152,12 +152,43 @@ set of recognized envs with their defaults:
 | `GLMH_SKILL_GATE_TOOLS` | `false` | enable skill-managed tool gating (`--skill-gate-tools`) |
 | `GLMH_TASK_RISK` | `low` | task risk boundary used for skill activation (`--task-risk`) |
 | `GLMH_EMBED_MODEL_PATH` | `~/all-MiniLM-L6-v2` if present | local sentence-transformers snapshot for semantic tools (`--embed-model-path`) |
+| `GLMH_TEMPERATURE` | `0.7` | sampling temperature for remote endpoints, in [0.0, 2.0] (`--temperature`) |
+| `GLMH_RPC_TOKEN` | auto-generated per process | bearer token required by the stdio JSON-RPC server (`--rpc-token`) |
+| `GLMH_RPC_AUTO_TOKEN` | `true` | auto-generate an RPC token when none is set (`--rpc-auto-token`) |
+| `GLMH_RPC_ALLOW_MUTATING` | `false` | permit mutating tool calls over the JSON-RPC server (`--rpc-allow-mutating`) |
+| `GLMH_STATE_DIR` | — | root directory the server may read `session/import.logPath` files from (`--state-dir`) |
 | `GITHUB_TOKEN` | — | bearer token for GitHub tools; also read from the environment directly (`--github-token`) |
 | `GITHUB_REPO` | — | default repo scope `owner/name` for GitHub tools (`--github`) |
 | `GITHUB_API_BASE` | `https://api.github.com` | GitHub REST API base URL, HTTPS required (`--github-api-base`) |
 
 Unknown `GLMH_*` variables are logged and ignored — typos won't crash the
 harness.
+
+### JSON-RPC server security
+
+The stdio protocol server (`--serve`) is authenticated by default:
+
+- **Token auth.** With no `--rpc-token` / `GLMH_RPC_TOKEN`, a per-process
+  token is generated with the OS CSPRNG, printed to stderr exactly once, and
+  required by every RPC after `initialize`. Set `--rpc-auto-token=false` to
+  run unauthenticated (loopback/IDE hosts only).
+- **Mutating tools denied.** `bash`, `write_file`, `edit_file`, and the
+  mutating GitHub tools are refused over RPC unless `--rpc-allow-mutating`
+  is passed explicitly.
+- **Import path scoping.** `session/import.logPath` reads are refused unless
+  the path is relative and falls under `--state-dir`.
+
+### Runtime & safety flags
+
+Sampling and behavior (`--temperature`, `--reasoning-effort`, `--max-rounds`,
+`--max-new-tokens`), retries and timeouts (`--max-retries`,
+`--request-timeout-s`, `--tool-timeout-s`), logging (`--log-format`,
+`--log-level`, `--corrupt-policy`), and the safety surface (`--sandbox`,
+`--tool-allowlist`, `--enable-bash` / `--no-enable-bash`,
+`--no-enable-fetch-url`) are all wired through the configuration layer above.
+The `bash` tool is on by default and prints a warning banner; pass
+`--no-enable-bash` to omit it. Every mutating tool is additionally gated by
+the `--sandbox` policy (default `deny`).
 
 ### Exit codes
 

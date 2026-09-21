@@ -437,17 +437,17 @@ class GitHubProvider:
             if isinstance(patch, str) and len(patch) > MAX_PATCH_CHARS:
                 patch = patch[:MAX_PATCH_CHARS]
                 patch_truncated = True
-                entry: dict[str, Any] = {
-                    "filename": f.get("filename"),
-                    "status": f.get("status"),
-                    "additions": f.get("additions", 0),
-                    "deletions": f.get("deletions", 0),
-                }
-                if patch:
-                    entry["patch"] = patch
-                if patch_truncated:
-                    entry["patch_truncated"] = True
-                values.append(entry)
+            entry: dict[str, Any] = {
+                "filename": f.get("filename"),
+                "status": f.get("status"),
+                "additions": f.get("additions", 0),
+                "deletions": f.get("deletions", 0),
+            }
+            if patch:
+                entry["patch"] = patch
+            if patch_truncated:
+                entry["patch_truncated"] = True
+            values.append(entry)
         has_more = len(values) >= clamped_per_page
         trimmed = values[: self.max_list_items]
         return {

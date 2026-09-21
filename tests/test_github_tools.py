@@ -14,7 +14,7 @@ from glmharness import (
     HarnessConfig,
     ToolRegistry,
 )
-from glmharness.errors import ConfigError
+from glmharness.errors import ConfigError, ToolError
 from glmharness.github import (
     GitHubOptions,
     GitHubPlugin,
@@ -146,6 +146,19 @@ def fake_github() -> GitHubProvider:
                 "html_url": "https://github.com/octocat/Hello-World/issues/1",
             },
         ),
+        ("GET", "/repos/octocat/Hello-World/issues/1/comments"): (
+            200,
+            {},
+            [
+                {
+                    "id": 7,
+                    "user": {"login": "carol"},
+                    "created_at": "2026-09-01T00:00:00Z",
+                    "body": "a comment",
+                },
+                {"not_a_comment": True},
+            ],
+        ),
         ("GET", "/repos/octocat/Hello-World/contents/README.md"): (
             200,
             {},
@@ -164,6 +177,22 @@ def fake_github() -> GitHubProvider:
                 {"name": "utils", "type": "dir", "size": 0},
             ],
         ),
+        ("GET", "/repos/octocat/Hello-World/pulls/10"): (
+            200,
+            {},
+            {
+                "number": 10,
+                "title": "Add feature",
+                "state": "open",
+                "user": {"login": "alice"},
+                "body": "does the thing",
+                "head": {"ref": "feature-branch"},
+                "base": {"ref": "main"},
+                "mergeable": True,
+                "diff_url": "https://github.com/octocat/Hello-World/pull/10.diff",
+                "html_url": "https://github.com/octocat/Hello-World/pull/10",
+            },
+        ),
         ("GET", "/repos/octocat/Hello-World/pulls"): (
             200,
             {},
@@ -175,6 +204,32 @@ def fake_github() -> GitHubProvider:
                     "head": {"ref": "feature-branch"},
                     "base": {"ref": "main"},
                 }
+            ],
+        ),
+        ("GET", "/repos/octocat/Hello-World/pulls/10/files"): (
+            200,
+            {},
+            [
+                {
+                    "filename": "big.py",
+                    "status": "modified",
+                    "additions": 500,
+                    "deletions": 2,
+                    "patch": "x" * (9 * 1024),  # > MAX_PATCH_CHARS (8 KiB)
+                },
+                {
+                    "filename": "small.py",
+                    "status": "modified",
+                    "additions": 1,
+                    "deletions": 0,
+                    "patch": "+tiny",
+                },
+                {
+                    "filename": "binary.bin",
+                    "status": "added",
+                    "additions": 0,
+                    "deletions": 0,
+                },
             ],
         ),
         ("GET", "/repos/octocat/Hello-World/branches"): (
@@ -194,6 +249,50 @@ def fake_github() -> GitHubProvider:
                     },
                 }
             ],
+        ),
+        ("GET", "/repos/octocat/Hello-World/commits/c0ffee1234567890"): (
+            200,
+            {},
+            {
+                "sha": "c0ffee1234567890",
+                "commit": {
+                    "message": "Initial commit",
+                    "author": {"name": "Alice", "date": "2026-09-01T00:00:00Z"},
+                },
+                "files": [
+                    {"filename": "a.py", "status": "modified", "additions": 3, "deletions": 1}
+                ],
+            },
+        ),
+        ("GET", "/search/issues"): (
+            200,
+            {},
+            {
+                "items": [
+                    {"number": 1, "title": "Bug found", "state": "open", "html_url": "https://x/1"},
+                    {"number": 2, "title": "PR-ish", "pull_request": {}, "state": "open"},
+                ]
+            },
+        ),
+        ("GET", "/repos/octocat/Hello-World/git/ref/heads/main"): (
+            200,
+            {},
+            {"object": {"sha": "c0ffee1234567890"}},
+        ),
+        ("POST", "/repos/octocat/Hello-World/git/refs"): (
+            201,
+            {},
+            {"ref": "refs/heads/feature-x"},
+        ),
+        ("POST", "/repos/octocat/Hello-World/issues/1/comments"): (
+            201,
+            {},
+            {"id": 55, "html_url": "https://github.com/...#55", "created_at": "2026-09-02T00:00:00Z"},
+        ),
+        ("POST", "/repos/octocat/Hello-World/pulls"): (
+            201,
+            {},
+            {"number": 20, "title": "New PR", "html_url": "https://github.com/.../20", "state": "open"},
         ),
         ("GET", "/search/code"): (
             200,
@@ -265,10 +364,81 @@ async def test_github_get_file_and_directory(fake_github: GitHubProvider) -> Non
     assert len(d["entries"]) == 2
 
 
+async def test_github_list_issue_comments_and_get_pr(fake_github: GitHubProvider) -> None:
+    comments = fake_github.list_issue_comments("octocat/Hello-World", 1)
+    # Malformed entries still project (id None) rather than crashing
+    assert [c["id"] for c in comments["values"]] == [7, None]
+    assert comments["values"][0]["user"] == "carol"
+
+    pr = fake_github.get_pull_request("octocat/Hello-World", 10)
+    assert pr["head"] == "feature-branch"
+    assert pr["base"] == "main"
+    assert pr["mergeable"] is True
+
+
+async def test_github_get_commit_and_search_issues(fake_github: GitHubProvider) -> None:
+    commit = fake_github.get_commit("octocat/Hello-World", "c0ffee1234567890")
+    assert commit["message"] == "Initial commit"
+    assert commit["files"][0]["filename"] == "a.py"
+
+    found = fake_github.search_issues("is:open", repo_slug="octocat/Hello-World")
+    assert len(found["values"]) == 2
+    assert found["values"][1]["pull_request"] is True
+
+
+async def test_github_mutating_battery(fake_github: GitHubProvider) -> None:
+    pr = fake_github.create_pull_request(
+        "octocat/Hello-World", "New PR", head="feature", base="main", body="go"
+    )
+    assert pr["number"] == 20
+
+    branch = fake_github.create_branch("octocat/Hello-World", "feature-x", from_branch="main")
+    assert branch["ref"] == "refs/heads/feature-x"
+    assert branch["sha"] == "c0ffee1234567890"
+
+    comment = fake_github.add_issue_comment("octocat/Hello-World", 1, "looks good")
+    assert comment["id"] == 55
+
+
+def test_github_error_paths(fake_github: GitHubProvider) -> None:
+    # HTTP error surfaces as ToolError with the API message
+    with pytest.raises(ToolError, match="GitHub API error 404"):
+        fake_github.get_repo("octocat/Missing-Repo")
+
+    # Malformed payload body coerces to a raw-text projection instead of crashing
+    provider = GitHubProvider(
+        GitHubOptions(
+            transport=lambda req, timeout_s: (200, {}, b"not json at all"),
+            owner="octocat",
+            repo="Hello-World",
+        )
+    )
+    repo = provider.get_repo("octocat/Hello-World")
+    assert repo["full_name"] == "octocat/Hello-World"  # slug fallback
+    assert repo["stargazers_count"] == 0
+
+    # Invalid commit SHA and branch name fail closed
+    with pytest.raises(ToolError, match="Invalid commit SHA"):
+        fake_github.get_commit("octocat/Hello-World", "zzz")
+    with pytest.raises(ToolError, match="Invalid branch name"):
+        fake_github.create_branch("octocat/Hello-World", "../escape")
+
+
 async def test_github_search_code(fake_github: GitHubProvider) -> None:
     res = fake_github.search_code("main", repo_slug="octocat/Hello-World")
     assert len(res["values"]) == 1
     assert res["values"][0]["path"] == "src/main.py"
+
+
+def test_github_pr_files_includes_unpatched_files(fake_github: GitHubProvider) -> None:
+    """Files without a patch (binary adds, large diffs) must not be dropped."""
+    res = fake_github.list_pull_request_files("octocat/Hello-World", 10)
+    filenames = [v["filename"] for v in res["values"]]
+    assert filenames == ["big.py", "small.py", "binary.bin"]
+    big = res["values"][0]
+    assert big["patch_truncated"] is True
+    assert len(big["patch"]) == 8 * 1024
+    assert "patch" not in res["values"][2]  # binary.bin carries no patch key
 
 
 async def test_github_tools_pipeline_and_sandbox(fake_github: GitHubProvider) -> None:

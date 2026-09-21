@@ -28,6 +28,7 @@ from .errors import ProviderError, ProviderTimeout
 from .llm import LLM
 from .logging import get_logger
 from .session import SessionLog
+from .telemetry_feedback import record_feedback
 from .tools import ToolRegistry, parse_tool_calls
 
 #: exception types worth replaying (the request is side-effect free)
@@ -188,6 +189,7 @@ class AgentLoop:
                 {"status": "failed", "error": type(exc).__name__, "message": str(exc)},
             )
             self.sessions.append("turn/end", {"status": "failed"})
+            record_feedback("bug", f"{type(exc).__name__}: {exc}", turn_status="failed")
             logger.error(
                 "turn failed: %s: %s",
                 type(exc).__name__,

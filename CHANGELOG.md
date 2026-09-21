@@ -3,6 +3,27 @@
 All notable changes to the GLM harness ship in this file. Versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `GitHubProvider.list_pull_request_files` dropped every PR file that carried
+  no (or a small) `patch` field — the append sat inside the oversized-patch
+  branch. Binary adds, renames, and small-diff files now appear in the tool
+  result, with oversized patches still truncated.
+- `record_feedback` no longer trips the stdlib logger's reserved `message`
+  LogRecord key; the message now rides in the log line itself. Listeners
+  registered via `on_feedback` actually fire (previously the blanket
+  exception handler swallowed the `KeyError` and telemetry was dead).
+
+### Added
+
+- Telemetry feedback is wired into the runtime: turn failures emit a `bug`
+  event and tool handler failures emit a `gap` event through
+  `record_feedback`. The module is exported from the package root
+  (`FEEDBACK_KINDS`, `on_feedback`, `record_feedback`) and covered by
+  `tests/test_telemetry_feedback.py`.
+
 ## [0.4.4] - 2026-09-20
 
 The verdict layer is wired into the tool registry, so every tool call is

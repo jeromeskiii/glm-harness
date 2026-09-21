@@ -205,6 +205,14 @@ This is a one-shot local runner. The kernel stays minimal on purpose:
 Tool outcomes are appended as `tool/result` facts; failed or cancelled
 provider calls close their turn with a durable status marker.
 
+### Verdict layer
+
+Every tool execution is judged against a named consequence before it
+becomes history. `ToolRegistry.verification_run` (a `VerificationRun`)
+records a `Consequence(tool, expect, arguments)` for each call and folds
+the result into an `ok` / `error` / `unknown` verdict; that verdict and
+the flow-step audit trail are appended to the durable `tool/result` fact.
+
 ### Production safety baseline
 
 The default sandbox policy is `deny`. To permit mutating tools, choose an

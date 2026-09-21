@@ -3,6 +3,21 @@
 All notable changes to the GLM harness ship in this file. Versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.4] - 2026-09-20
+
+The verdict layer is wired into the tool registry, so every tool call is
+judged against a named consequence and the judgment is durable.
+
+### Added
+
+- `VerificationRun` now lives on `ToolRegistry` (`registry.verification_run`);
+  every executed call records a `Consequence(tool, expect, arguments)` and
+  the folded verdict (`ok` / `error` / `unknown`).
+- The `tool/result` fact carries `verdict` plus a `steps` audit trail built
+  from the flow-step vocabulary (`pre-execute`, `post-execute`).
+- `Consequence`, `VerificationRun`, and `judge` are exported from the
+  package root; `tests/test_verdict.py` covers the layer and its wiring.
+
 ## [0.4.3] - 2026-09-12
 
 Reproducible end-to-end coverage for the remote model path, and a

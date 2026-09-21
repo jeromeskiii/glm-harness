@@ -78,6 +78,7 @@ from .stop_slop import (
     make_stop_slop_rules_tool,
 )
 from .tools import Tool, ToolRegistry, parse_tool_calls, validate_tool_arguments
+from .verdict import Consequence, VerificationRun, judge
 
 __all__ = [
     "LLM",
@@ -86,6 +87,7 @@ __all__ = [
     "BuiltinToolsPlugin",
     "CompactionPlugin",
     "ConfigError",
+    "Consequence",
     "Context",
     "EmbeddingProvider",
     "EmbeddingsPlugin",
@@ -118,6 +120,7 @@ __all__ = [
     "ToolError",
     "ToolRegistry",
     "TransformersGLM",
+    "VerificationRun",
     "__version__",
     "clean_html_to_markdown",
     "compact_session",
@@ -125,6 +128,7 @@ __all__ = [
     "default_skills",
     "generate_rpc_token",
     "import_skills_from_dir",
+    "judge",
     "looks_like_snapshot",
     "make_embed_text_tool",
     "make_fetch_url_tool",

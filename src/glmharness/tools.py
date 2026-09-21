@@ -21,9 +21,15 @@ from .artifacts.flow_constants import (
     POST_EXECUTE,
     PRE_EXECUTE,
 )
+from .artifacts.flow_step_tool import (
+    STAGE_POST_EXECUTE,
+    STAGE_PRE_EXECUTE,
+    step_step_event,
+)
 from .artifacts.flow_types import Tool
 from .context import Context
 from .logging import get_logger
+from .verdict import Consequence, VerificationRun
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL | re.IGNORECASE)
 _ARGS_RE = re.compile(
@@ -154,6 +160,7 @@ class ToolRegistry:
         self.ctx = ctx
         self.tools: dict[str, Tool] = {}
         self.tool_timeout_s = tool_timeout_s
+        self.verification_run = VerificationRun()
 
     def register(self, tool: Tool) -> Callable[[], None]:
         if tool.name in self.tools:
@@ -179,6 +186,12 @@ class ToolRegistry:
         ]
 
     def _finish(self, call: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+        verdict = self.verification_run.record(
+            Consequence(
+                tool=call["name"], expect="ok", arguments=call.get("arguments", {})
+            ),
+            response,
+        )
         sessions = self.ctx.services.get("sessions")
         if sessions is not None:
             sessions.append(
@@ -188,6 +201,11 @@ class ToolRegistry:
                     "name": call["name"],
                     "ok": response.get("ok", False),
                     "content": response.get("content", response.get("error", "")),
+                    "verdict": verdict,
+                    "steps": [
+                        step_step_event(STAGE_PRE_EXECUTE, PRE_EXECUTE),
+                        step_step_event(STAGE_POST_EXECUTE, POST_EXECUTE),
+                    ],
                 },
             )
         return response

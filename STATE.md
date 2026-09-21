@@ -117,3 +117,18 @@
 
 
 
+
+## Phase 14: Verdict Layer Wiring (COMPLETED)
+- Wired `VerificationRun` into `ToolRegistry` (`src/glmharness/tools.py`): every
+  executed call records a `Consequence(tool, expect, arguments)` and the folded
+  verdict (`ok`/`error`/`unknown`) is exposed via `registry.verification_run`.
+- The durable `tool/result` fact now carries `verdict` plus a flow-step audit
+  trail built with `step_step_event` and the `pre-execute`/`post-execute` stage
+  vocabulary from `src/glmharness/artifacts/flow_step_tool.py`.
+- Exported `Consequence`, `VerificationRun`, and `judge` from the package root
+  (`src/glmharness/__init__.py`).
+- Added `tests/test_verdict.py` (6 tests): judge mapping, run folding,
+  flow-step records, and registry integration for ok/error verdicts.
+- Documented in `README-HARNESS.md` (Verdict layer section) and bumped to
+  0.4.4 (single source: `src/glmharness/identity/brand.py`).
+- Full test suite: 225 passed, 2 skipped; 0 ruff errors, 0 pyright errors.

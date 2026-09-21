@@ -17,13 +17,15 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+from .wire.constants.constants import BUS_MODES
+
 Listener = Callable[..., Any]
 #: off() handles returned by ``on``.
 Off = Callable[[], None]
 
 
 class EventBus:
-    MODES = frozenset({"emit", "waterfall", "parallel", "serial"})
+    MODES = BUS_MODES
 
     def __init__(self) -> None:
         self._listeners: dict[str, list[tuple[int, Listener]]] = {}

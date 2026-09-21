@@ -10,7 +10,9 @@ the kernel.
 
 from __future__ import annotations
 
-__version__ = "0.4.3"
+from .identity.brand import HARNESS_VERSION
+
+__version__ = HARNESS_VERSION
 
 from .builtin_tools import (
     BuiltinToolsPlugin,

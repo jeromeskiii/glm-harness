@@ -31,6 +31,7 @@ from .sandbox import SandboxPlugin
 from .session import SessionLog
 from .skills import RiskLevel, SkillCatalog, SkillsPlugin
 from .tools import ToolRegistry
+from .wire.constants.constants import SERVER_CAPABILITIES
 
 #: Tools that are reachable through ``tools/execute`` only when the operator
 #: has explicitly enabled ``rpc_allow_mutating``. These are the tools that
@@ -43,21 +44,8 @@ _RPC_MUTATING_TOOLS: frozenset[str] = frozenset({
     "edit_file",
 }) | GITHUB_MUTATING_TOOLS
 
-_SERVER_CAPABILITIES = {
-    "streaming": True,
-    "replay.from_log": True,
-    "tools.native": True,
-    "tools.code": True,
-    "compaction": True,
-    "approval.ask": True,
-    "skills": True,
-    "subagents.native": False,
-    "plan": False,
-    "goals": False,
-    "mcp.client": False,
-    "prompt.image": False,
-    "fs.world": True,
-    "sandbox.world": True,
+_SERVER_CAPABILITIES: dict[str, bool] = {
+    **SERVER_CAPABILITIES,
     "runtime.multiSession": True,
 }
 

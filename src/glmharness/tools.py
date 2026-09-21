@@ -14,10 +14,14 @@ import copy
 import json
 import re
 import uuid
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any, cast
 
+from .artifacts.flow_constants import (
+    POST_EXECUTE,
+    PRE_EXECUTE,
+)
+from .artifacts.flow_types import Tool
 from .context import Context
 from .logging import get_logger
 
@@ -145,17 +149,6 @@ def parse_tool_calls(text: str) -> list[dict[str, Any]]:
     return calls
 
 
-@dataclass
-class Tool:
-    """A tool the model may call. ``allowed`` is the static policy gate."""
-
-    name: str
-    description: str
-    schema: dict[str, Any]
-    handler: Callable[[dict[str, Any]], Awaitable[Any] | Any]
-    allowed: bool = True
-
-
 class ToolRegistry:
     def __init__(self, ctx: Context, tool_timeout_s: float = 30.0):
         self.ctx = ctx
@@ -222,7 +215,7 @@ class ToolRegistry:
         }
         try:
             dispatched = await self._dispatch_with_timeout(
-                "tools/pre-execute", "waterfall", call
+                PRE_EXECUTE, "waterfall", call
             )
         except TimeoutError:
             get_logger().warning(
@@ -280,7 +273,7 @@ class ToolRegistry:
             )
         try:
             post = await self._dispatch_with_timeout(
-                "tools/post-execute",
+                POST_EXECUTE,
                 "waterfall",
                 {"call": call, "result": result},
             )

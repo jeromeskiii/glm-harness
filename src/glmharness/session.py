@@ -25,6 +25,10 @@ from typing import Any, cast
 
 from .errors import SessionCorruptError
 from .logging import get_logger
+from .wire.constants.session_constants import (
+    DEFAULT_CORRUPT_POLICY,
+    SESSION_SURFACE,
+)
 
 
 @dataclass(frozen=True)
@@ -39,11 +43,11 @@ class SessionLog:
     """An append-only event log, optionally persisted to a JSONL file."""
 
     path: Path | None = None
-    corrupt_policy: str = "skip"
+    corrupt_policy: str = DEFAULT_CORRUPT_POLICY
     events: list[SessionEvent] = field(default_factory=list, init=False)  # type: ignore[assignment]
     corrupt_lines: int = field(default=0, init=False)  # type: ignore[assignment]
 
-    SURFACE = frozenset({"user/message", "assistant/message", "tool/result"})
+    SURFACE = SESSION_SURFACE
 
     def __post_init__(self) -> None:
         if self.path and self.path.exists():

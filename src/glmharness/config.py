@@ -18,8 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import ConfigError
+from .identity.brand import ENV_PREFIX
 
-_ENV_PREFIX = "GLMH_"
+_ENV_PREFIX = ENV_PREFIX
 
 #: env var name -> (attribute, converter, allowed values)
 _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {

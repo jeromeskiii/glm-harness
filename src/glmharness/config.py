@@ -32,6 +32,8 @@ _ENV_MAP: dict[str, tuple[str, str, tuple[str, ...] | None]] = {
     "MAX_ROUNDS": ("max_rounds", "int", None),
     "TOOL_TIMEOUT_S": ("tool_timeout_s", "float", None),
     "REQUEST_TIMEOUT_S": ("request_timeout_s", "float", None),
+    "TURN_TIMEOUT_S": ("turn_timeout_s", "float", None),
+    "MAX_SESSIONS": ("max_sessions", "int", None),
     "MAX_RETRIES": ("max_retries", "int", None),
     "RETRY_BASE_DELAY_S": ("retry_base_delay_s", "float", None),
     "RETRY_MAX_DELAY_S": ("retry_max_delay_s", "float", None),
@@ -91,6 +93,11 @@ class HarnessConfig:
     max_rounds: int = 12
     request_timeout_s: float = 300.0
     tool_timeout_s: float = 30.0
+    # Whole-turn deadline for server ``agent/send`` (covers all rounds and
+    # retries). 3600s = max_rounds x request_timeout_s, the legitimate worst
+    # case; a turn without a budget could otherwise hold the server ~forever
+    # if a provider wedges outside every per-request timeout. 0 disables.
+    turn_timeout_s: float = 3600.0
 
     # retry (exponential backoff with jitter)
     max_retries: int = 2
@@ -146,6 +153,12 @@ class HarnessConfig:
     # Root directory under which session/import RPC may read ``logPath`` files.
     # Defaults to None which means only relative paths are accepted.
     state_dir: Path | None = None
+
+    # Cap on in-memory sessions held by the protocol server. When exceeded,
+    # the oldest non-default session is evicted (with a warning) — server
+    # memory must be bounded for months-long stdio hosting. Only ``default``
+    # is persisted to ``session_path``; dynamic sessions are RAM-only.
+    max_sessions: int = 256
 
     # GitHub seam: when token or repo is configured, GitHubPlugin mounts tools
     github_token: str | None = None
@@ -224,7 +237,11 @@ class HarnessConfig:
                 f"corrupt_policy must be skip|rename|fail: {self.corrupt_policy!r}"
             )
         if self.request_timeout_s < 0 or self.tool_timeout_s < 0:
-            raise ConfigError("timeouts must be >= 0 (0 disables them)")
+            raise ConfigError("request_timeout_s and tool_timeout_s must be >= 0")
+        if self.turn_timeout_s < 0:
+            raise ConfigError("turn_timeout_s must be >= 0")
+        if self.max_sessions < 1:
+            raise ConfigError("max_sessions must be >= 1")
         if not 0 <= self.retry_jitter < 1:
             raise ConfigError("retry_jitter must be in [0, 1)")
         if self.retry_base_delay_s <= 0 or self.retry_max_delay_s < self.retry_base_delay_s:
@@ -285,8 +302,8 @@ def resolve_model_path(config: HarnessConfig, *, cwd: Path | None = None) -> Har
         config.model_path = here
         return config
     raise ConfigError(
-        "either --mock, --api-base (GLMH_API_BASE), or a model path (--model-path / GLMH_MODEL_PATH) is "
-        "required (cwd is not a GLM snapshot)"
+        f"either --mock, --api-base ({ENV_PREFIX}API_BASE), or a model path "
+        f"(--model-path / {ENV_PREFIX}MODEL_PATH) is required (cwd is not a GLM snapshot)"
     )
 
 

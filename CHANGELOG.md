@@ -15,6 +15,10 @@ follow [Semantic Versioning](https://semver.org/).
   LogRecord key; the message now rides in the log line itself. Listeners
   registered via `on_feedback` actually fire (previously the blanket
   exception handler swallowed the `KeyError` and telemetry was dead).
+- Protocol server: the per-request `sessions` service slot is restored in
+  `finally` so a later request can never observe a stale session, and the
+  `state_dir` guard coerces to `Path` so a string-constructed config cannot
+  crash `session/import` with `AttributeError`.
 
 ### Added
 
@@ -23,6 +27,26 @@ follow [Semantic Versioning](https://semver.org/).
   `record_feedback`. The module is exported from the package root
   (`FEEDBACK_KINDS`, `on_feedback`, `record_feedback`) and covered by
   `tests/test_telemetry_feedback.py`.
+- TypeScript entry point: `src/index.ts` (Node >= 22, zero dependencies, ESM,
+  no build step) mirrors the CLI initialization sequence — parse argv, merge
+  config, validate, resolve runtime, build child argv, dispatch — and
+  delegates to the resolved runtime with inherited stdio, so the stream
+  contract and exit codes (0/2/3/4/130) are unchanged. `--trace-init` /
+  `GLMH_TRACE_INIT=1` trace the sequence on stderr; `GLMH_HARNESS_BIN` and
+  `GLMH_PYTHON` pin the runtime. Documented in `README.md` and
+  `README-HARNESS.md`.
+- Reliability hardening: `write_file` / `edit_file` write atomically (temp
+  file + fsync + `os.replace`) and reject payloads above 10 MiB; the
+  protocol server bounds its in-memory session cache via `GLMH_MAX_SESSIONS`
+  (default 256, oldest non-default evicted with a warning) and runs
+  `agent/send` under a whole-turn deadline `GLMH_TURN_TIMEOUT_S` (default
+  3600 s; 0 disables) that closes the turn with a durable `TURN_TIMEOUT`
+  marker. Covered by `tests/test_hardening.py`.
+- Identity strings are single-sourced in `identity.brand`: `HARNESS_AUTHOR`,
+  `HARNESS_REPO`, `HARNESS_HF`, and `MODEL_VENDOR` now feed the CLI help,
+  doctor output, the `fetch_url` user agent, the JSON-RPC
+  `runtimeInfo.vendor`, and the missing-weights error message; `LICENSE`
+  adds the harness copyright.
 
 ## [0.4.4] - 2026-09-20
 

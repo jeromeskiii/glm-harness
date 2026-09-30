@@ -19,6 +19,9 @@ repomix-output.xml
 repomix.config.json
 *.prof
 
+# Agent-session artifacts
+.omo/
+
 # Runtime artifacts
 .sessions/
 *.jsonl.corrupt-*

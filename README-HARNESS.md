@@ -5,6 +5,12 @@ snapshot. The kernel owns three primitives — `Context`, `EventBus`, and
 `PluginLoader` — and everything else (session log, tool registry, agent
 loop, model adapter) is a replaceable service behind them.
 
+The kernel is exposed through two front doors: the authoritative Python CLI
+(`glm-harness`) and a zero-dependency TypeScript entry point
+([`src/index.ts`](./src/index.ts)) that mirrors the CLI's initialization
+sequence and delegates to it — for Node hosts such as IDE carriers, DMH
+controllers, and sibling `-H` harnesses.
+
 ## Install
 
 ```bash
@@ -56,6 +62,37 @@ glm-harness --similarity 'machine learning' 'neural networks'
 
 The CLI composes with pipes: the final answer is on stdout, every
 diagnostic record on stderr.
+
+### TypeScript entry point
+
+`src/index.ts` is the Node-side front door: zero dependencies, ESM, no
+build step, executed via Node's type stripping (Node ≥ 22; add
+`--experimental-strip-types` on Node < 23.6):
+
+```bash
+# Pre-flight
+node src/index.ts --doctor
+
+# Deterministic mock run
+node src/index.ts --mock 'hello from the mock adapter' 'say hello'
+
+# Same flags and GLMH_* layering as the Python CLI
+node src/index.ts --api-base http://127.0.0.1:8000/v1 'Explain this repository'
+
+# Trace the initialization sequence (steps 1-6) on stderr
+GLMH_TRACE_INIT=1 node src/index.ts --mock ok 'say hello'
+```
+
+It mirrors the Python initialization sequence step for step — parse argv →
+merge config → validate → resolve runtime → build child argv → dispatch —
+and executes the resolved runtime with inherited stdio, so the stream
+contract is unchanged: stdout carries only the final answer, diagnostics
+go to stderr, and exit codes match the CLI (`0` ok, `2` config, `3`
+provider, `4` tool, `130` cancelled).
+
+Runtime resolution order: `$GLMH_HARNESS_BIN` → `$GLMH_PYTHON`
+(`-m glmharness.cli`) → `<repo>/.venv/bin/glm-harness` → `glm-harness` on
+`PATH` → `python3 -m glmharness.cli`.
 
 ### Local snapshot requirements
 
@@ -134,6 +171,7 @@ set of recognized envs with their defaults:
 | `GLMH_MAX_ROUNDS` | 12 | tool-calling rounds per turn |
 | `GLMH_REQUEST_TIMEOUT_S` | 300 | per-request wall clock in seconds; 0 disables |
 | `GLMH_TOOL_TIMEOUT_S` | 30 | per-tool timeout |
+| `GLMH_TURN_TIMEOUT_S` | `3600` | whole-turn deadline for server `agent/send`, covering every round and retry (env-only); 0 disables |
 | `GLMH_MAX_RETRIES` | 2 | retries on transient provider failure |
 | `GLMH_RETRY_BASE_DELAY_S` | 1.0 | exponential-backoff base |
 | `GLMH_RETRY_MAX_DELAY_S` | 30.0 | backoff cap |
@@ -157,12 +195,22 @@ set of recognized envs with their defaults:
 | `GLMH_RPC_AUTO_TOKEN` | `true` | auto-generate an RPC token when none is set (`--rpc-auto-token`) |
 | `GLMH_RPC_ALLOW_MUTATING` | `false` | permit mutating tool calls over the JSON-RPC server (`--rpc-allow-mutating`) |
 | `GLMH_STATE_DIR` | — | root directory the server may read `session/import.logPath` files from (`--state-dir`) |
+| `GLMH_MAX_SESSIONS` | `256` | cap on in-memory sessions held by the protocol server; the oldest non-default session is evicted with a warning (env-only) |
 | `GITHUB_TOKEN` | — | bearer token for GitHub tools; also read from the environment directly (`--github-token`) |
 | `GITHUB_REPO` | — | default repo scope `owner/name` for GitHub tools (`--github`) |
 | `GITHUB_API_BASE` | `https://api.github.com` | GitHub REST API base URL, HTTPS required (`--github-api-base`) |
 
 Unknown `GLMH_*` variables are logged and ignored — typos won't crash the
 harness.
+
+Bridge-only variables (consumed by the TypeScript entry before it delegates;
+the Python CLI itself never reads them):
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `GLMH_HARNESS_BIN` | — | explicit path to the `glm-harness` console script |
+| `GLMH_PYTHON` | — | python interpreter used for the `-m glmharness.cli` path |
+| `GLMH_TRACE_INIT` | — | set to `1` to trace the initialization sequence to stderr |
 
 ### JSON-RPC server security
 
@@ -177,6 +225,14 @@ The stdio protocol server (`--serve`) is authenticated by default:
   is passed explicitly.
 - **Import path scoping.** `session/import.logPath` reads are refused unless
   the path is relative and falls under `--state-dir`.
+- **Bounded session cache.** At most `GLMH_MAX_SESSIONS` (default 256)
+  sessions are held in memory; when the cap is reached the oldest
+  non-default session is evicted with a warning (only `default` persists to
+  `--session`).
+- **Turn deadline.** `agent/send` runs under a whole-turn budget
+  (`GLMH_TURN_TIMEOUT_S`, default 3600 s; 0 disables). Expiry closes the
+  turn with a durable `TURN_TIMEOUT` marker and returns JSON-RPC error
+  `-32008`.
 
 ### Runtime & safety flags
 
@@ -220,6 +276,9 @@ pytest --cov=glmharness --cov-report=term-missing        # coverage
 ruff check src tests                                      # lint
 ```
 
+The TypeScript entry has no build step and no dependencies; run it directly
+(`node src/index.ts --help`).
+
 ## Deliberate MVP boundaries
 
 This is a one-shot local runner. The kernel stays minimal on purpose:
@@ -227,7 +286,8 @@ This is a one-shot local runner. The kernel stays minimal on purpose:
 - **OS sandbox** is not in the kernel. `SafetyPlugin` is the production
   allowlist gate on `tools/pre-execute`; add an approval plugin the same way.
 - **Network protocol** is not exposed by the harness; the stdio JSON-RPC carrier
-  is intended for a local host such as an IDE or DMH controller.
+  and the TypeScript entry point (`src/index.ts`, which spawns the runtime with
+  inherited stdio) are intended for a local host such as an IDE or DMH controller.
 - **Streaming backpressure** is bounded only by the consumer's iterator;
   a hosting carrier would add explicit flow control.
 - **Multi-image / video** inputs require the multimodal chat template;

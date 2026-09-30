@@ -15,6 +15,7 @@ import os
 import re
 import signal
 import socket
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .context import Context
+from .identity.brand import HARNESS_NAME, HARNESS_VERSION
 from .stop_slop import (
     make_stop_slop_analyze_tool,
     make_stop_slop_examples_tool,
@@ -47,6 +49,10 @@ _DEFAULT_IGNORED_DIRS = {
 #: very large file cannot exhaust memory before slicing. The slice is still
 #: bounded by ``limit`` lines, but the initial read was unbounded.
 _READ_FILE_MAX_BYTES = 10 * 1024 * 1024
+#: Cap a single ``write_file`` payload at 10 MiB, mirroring the read cap: a
+#: looping model or abusive RPC peer must not be able to fill the disk with a
+#: single unbounded write.
+_MAX_WRITE_BYTES = 10 * 1024 * 1024
 
 
 def resolve_safe_path(base: Path, relative_or_absolute: str | Path) -> Path:
@@ -65,6 +71,38 @@ def resolve_safe_path(base: Path, relative_or_absolute: str | Path) -> Path:
     if resolved != base_resolved and base_resolved not in resolved.parents:
         raise PermissionError(f"access denied: '{relative_or_absolute}' escapes workspace boundary")
     return resolved
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    """Write ``content`` to ``target`` atomically.
+
+    The payload goes to a temp file in the target's directory, is fsync'd,
+    then ``os.replace``d over the target — POSIX-atomic, so a crash or kill
+    mid-write leaves the original file intact (worst case: an orphaned temp
+    file, never a truncated user file).
+    """
+    data = content.encode("utf-8")
+    tmp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=str(target.parent),
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_name = tmp.name
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, target)
+        tmp_name = None
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
 
 
 def make_read_file_tool(workspace: Path) -> Tool:
@@ -131,12 +169,17 @@ def make_write_file_tool(workspace: Path) -> Tool:
 
     def handler(args: dict[str, Any]) -> dict[str, Any]:
         target = resolve_safe_path(workspace, str(args["path"]))
-        target.parent.mkdir(parents=True, exist_ok=True)
         content = str(args["content"])
-        target.write_text(content, encoding="utf-8")
+        payload_size = len(content.encode("utf-8"))
+        if payload_size > _MAX_WRITE_BYTES:
+            raise ValueError(
+                f"content too large to write: {payload_size} bytes > {_MAX_WRITE_BYTES} bytes"
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(target, content)
         return {
             "path": str(target.relative_to(workspace.resolve())),
-            "bytes_written": len(content.encode("utf-8")),
+            "bytes_written": payload_size,
         }
 
     return Tool(
@@ -172,7 +215,12 @@ def make_edit_file_tool(workspace: Path) -> Tool:
         if count > 1:
             raise ValueError(f"target text matches {count} times in {args['path']}; must be unique")
         updated = content.replace(old_string, new_string, 1)
-        target.write_text(updated, encoding="utf-8")
+        updated_size = len(updated.encode("utf-8"))
+        if updated_size > _MAX_WRITE_BYTES:
+            raise ValueError(
+                f"edited content too large to write: {updated_size} bytes > {_MAX_WRITE_BYTES} bytes"
+            )
+        _atomic_write_text(target, updated)
         return {
             "path": str(target.relative_to(workspace.resolve())),
             "replacements": 1,
@@ -737,7 +785,7 @@ def make_fetch_url_tool() -> Tool:
             pin_ip, pin_port = _first_global_address(hostname, port)
             req = urllib.request.Request(
                 raw_url,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; GLM-5.3-Flash-Harness/0.4.2)"},
+                headers={"User-Agent": f"Mozilla/5.0 (compatible; {HARNESS_NAME}/{HARNESS_VERSION})"},
             )
             opener = _PinnedAddrOpener(pin_ip, pin_port, parsed.scheme.lower())
             try:

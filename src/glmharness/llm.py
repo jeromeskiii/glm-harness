@@ -26,6 +26,7 @@ from threading import Thread
 from typing import Any, Protocol, cast
 
 from .errors import ConfigError, ProviderError
+from .identity.brand import CLI_ENTRY
 from .logging import get_logger
 
 
@@ -268,7 +269,7 @@ class TransformersGLM:
         raise ConfigError(
             f"snapshot has no model weights: {detail}. The full FP8 checkpoint "
             "needs ~330 GB disk and ~660 GB RAM once dequantized; run against a "
-            "served endpoint instead: glm-harness --api-base http://HOST:PORT/v1 'prompt'"
+            f"served endpoint instead: {CLI_ENTRY} --api-base http://HOST:PORT/v1 'prompt'"
         )
 
     def _load(self) -> None:

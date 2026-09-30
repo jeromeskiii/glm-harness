@@ -13,6 +13,7 @@ from .config import HarnessConfig, resolve_embed_model_path, resolve_model_path
 from .context import Context, PluginLoader
 from .embeddings import EmbeddingProvider, EmbeddingsPlugin
 from .github import GitHubOptions, GitHubPlugin, GitHubProvider
+from .identity.brand import ENV_PREFIX
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging
 from .loop import AgentLoop
@@ -217,7 +218,7 @@ async def run_repl(
                     provider = ctx.services.get("embeddings")
                     if provider is None:
                         output_func(
-                            "Embeddings disabled: set GLMH_EMBED_MODEL_PATH or "
+                            f"Embeddings disabled: set {ENV_PREFIX}EMBED_MODEL_PATH or "
                             "--embed-model-path.\n\n"
                         )
                         continue

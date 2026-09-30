@@ -49,6 +49,26 @@ glm-harness --session .sessions/demo.jsonl 'Plan a release'
 glm-harness --github octocat/Hello-World 'list the open issues'
 ```
 
+### TypeScript entry point
+
+Node hosts (IDE carriers, DMH controllers, sibling `-H` harnesses) can front the same runtime through [`src/index.ts`](./src/index.ts) — zero dependencies, ESM, executed directly via Node's type stripping (Node ≥ 22; add `--experimental-strip-types` on Node < 23.6). No build step.
+
+```bash
+# Pre-flight
+node src/index.ts --doctor
+
+# Deterministic mock run (no model weights needed)
+node src/index.ts --mock 'hello from the mock adapter' 'say hello'
+
+# Same flags and GLMH_* env layering as the Python CLI
+node src/index.ts --api-base http://127.0.0.1:8000/v1 'Explain this repository'
+
+# Trace the initialization sequence (steps 1-6) on stderr
+GLMH_TRACE_INIT=1 node src/index.ts --mock ok 'say hello'
+```
+
+The entry mirrors the Python initialization sequence step for step — parse argv → merge config → validate → resolve runtime → build child argv → dispatch — and executes the resolved runtime with inherited stdio, so stdout carries only the final answer and exit codes match the CLI (`0` ok, `2` config, `3` provider, `4` tool, `130` cancelled). Runtime resolution order: `$GLMH_HARNESS_BIN` → `$GLMH_PYTHON` (`-m glmharness.cli`) → `<repo>/.venv/bin/glm-harness` → `glm-harness` on `PATH` → `python3 -m glmharness.cli`.
+
 ### Configuration
 
 Knobs are layered: built-in defaults → `GLMH_*` env vars → CLI flags. See [`README-HARNESS.md`](./README-HARNESS.md) for the full reference.
@@ -58,7 +78,7 @@ Knobs are layered: built-in defaults → `GLMH_*` env vars → CLI flags. See [`
 This is a **one-shot local runner** — not a production serving framework. The kernel stays minimal on purpose:
 
 - **OS sandbox** is not in the kernel; `SafetyPlugin` is the allowlist gate (`GLMH_TOOL_ALLOWLIST`)
-- **No network protocol** — the CLI is the only entry point
+- **No network protocol** — entry points are the CLI, the stdio JSON-RPC server (`--serve`), and the TypeScript front door (`src/index.ts`)
 - **Bounded streaming** — flow control is left to the consumer
 - **Text-only by default** — multimodal inputs require the chat template
 

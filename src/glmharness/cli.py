@@ -44,6 +44,7 @@ from .context import Context, PluginLoader
 from .embeddings import EmbeddingProvider, EmbeddingsPlugin
 from .errors import ConfigError, HarnessError, ProviderError
 from .github import GitHubOptions, GitHubPlugin, GitHubProvider
+from .identity.brand import CLI_ENTRY, ENV_PREFIX
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
@@ -59,7 +60,7 @@ from .tools import ToolRegistry
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="glm-harness",
+        prog=CLI_ENTRY,
         description="Run GLM-5.3-Flash through the H1 plugin harness.",
     )
     parser.add_argument("prompt", nargs="?", help="one-shot user prompt (else prompts)")
@@ -67,13 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--temperature",
         type=float,
         default=None,
-        help="sampling temperature for remote endpoints (default: $GLMH_TEMPERATURE or 0.7)",
+        help=f"sampling temperature for remote endpoints (default: ${ENV_PREFIX}TEMPERATURE or 0.7)",
     )
     parser.add_argument(
         "--model-path",
         type=Path,
         default=None,
-        help="path to a GLM-5.3-Flash snapshot (default: $GLMH_MODEL_PATH or repo root)",
+        help=f"path to a GLM-5.3-Flash snapshot (default: ${ENV_PREFIX}MODEL_PATH or repo root)",
     )
     parser.add_argument(
         "--session",
@@ -258,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "path to a sentence-transformers snapshot (e.g. all-MiniLM-L6-v2); "
-            "default: $GLMH_EMBED_MODEL_PATH, then ~/all-MiniLM-L6-v2 when present"
+            f"default: ${ENV_PREFIX}EMBED_MODEL_PATH, then ~/all-MiniLM-L6-v2 when present"
         ),
     )
     parser.add_argument(
@@ -267,7 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "bearer token required by the stdio JSON-RPC server's initialize "
-            "RPC; default: $GLMH_RPC_TOKEN. When unset, a per-process token is "
+            f"RPC; default: ${ENV_PREFIX}RPC_TOKEN. When unset, a per-process token is "
             "auto-generated and printed to stderr exactly once (set "
             "--rpc-auto-token=false to disable)."
         ),
@@ -324,7 +325,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--github-token",
         type=str,
         default=None,
-        help="GitHub personal access token / bearer token (defaults to $GITHUB_TOKEN or $GLMH_GITHUB_TOKEN)",
+        help=(
+            "GitHub personal access token / bearer token "
+            f"(defaults to $GITHUB_TOKEN or ${ENV_PREFIX}GITHUB_TOKEN)"
+        ),
     )
     parser.add_argument(
         "--github-api-base",
@@ -623,7 +627,7 @@ def doctor(config: HarnessConfig) -> int:
                 )
     else:
         rows.append(
-            ("embeddings", "disabled (set GLMH_EMBED_MODEL_PATH or --embed-model-path)", True)
+            ("embeddings", f"disabled (set {ENV_PREFIX}EMBED_MODEL_PATH or --embed-model-path)", True)
         )
     ws = (config.workspace_dir or Path.cwd()).resolve()
     rows.append(("workspace", str(ws), ws.is_dir()))
@@ -676,7 +680,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             embed_path = resolve_embed_model_path(embed_config)
             if embed_path is None:
                 raise ConfigError(
-                    "no embedding model: set --embed-model-path (or GLMH_EMBED_MODEL_PATH)"
+                    f"no embedding model: set --embed-model-path (or {ENV_PREFIX}EMBED_MODEL_PATH)"
                 )
             provider = EmbeddingProvider(embed_path)
             if args.embed is not None:

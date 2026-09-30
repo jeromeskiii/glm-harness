@@ -110,6 +110,8 @@
 - **Phase 11**: HTTP / Web Document Reader Tool (`fetch_url`).
 - **Phase 12**: Remote Path End-to-End Coverage & Version Single-Sourcing.
 - **Phase 13**: GitHub REST Client & Tool Battery (`github.py`, 18 tools, sandbox-gated mutations).
+- **Phase 14**: Verdict Layer Wiring (`VerificationRun` on `ToolRegistry`).
+- **Phase 15**: TypeScript Entry Point & Reliability Hardening.
 
 
 
@@ -132,3 +134,36 @@
 - Documented in `README-HARNESS.md` (Verdict layer section) and bumped to
   0.4.4 (single source: `src/glmharness/identity/brand.py`).
 - Full test suite: 225 passed, 2 skipped; 0 ruff errors, 0 pyright errors.
+
+## Phase 15: TypeScript Entry Point & Reliability Hardening (COMPLETED)
+- Shipped `src/index.ts`: zero-dependency TypeScript entry point (Node >= 22,
+  ESM, no build step, native type stripping) that mirrors the Python CLI
+  initialization sequence (parse argv → merge config → validate → resolve
+  runtime → build child argv → dispatch) and delegates to the resolved
+  runtime with inherited stdio. `--trace-init` / `GLMH_TRACE_INIT=1` trace
+  steps 1-6 on stderr; `GLMH_HARNESS_BIN` / `GLMH_PYTHON` pin the runtime.
+  Exit-code parity verified against the Python CLI (mock 0, config 2,
+  missing-weights 2, provider failure 3, and a full `--serve` JSON-RPC
+  round trip through the bridge at 0).
+- Reliability hardening from adversarial review: atomic `write_file` /
+  `edit_file` (temp file + fsync + `os.replace`) with a 10 MiB payload cap;
+  protocol-server session cache bounded by `GLMH_MAX_SESSIONS` (oldest
+  non-default evicted with a warning); `agent/send` whole-turn deadline
+  `GLMH_TURN_TIMEOUT_S` (default 3600 s) closing the turn with a durable
+  `TURN_TIMEOUT` marker; per-RPC `sessions` service slot restored in
+  `finally`; `state_dir` defensively coerced via `Path(...)`.
+- Identity single-sourcing: `HARNESS_AUTHOR`, `HARNESS_REPO`, `HARNESS_HF`,
+  `MODEL_VENDOR` added to `identity.brand` and wired through CLI help,
+  doctor output, the `fetch_url` user agent, and the JSON-RPC
+  `runtimeInfo.vendor`; `LICENSE` carries the harness copyright and
+  `.gitignore` excludes `.omo/`.
+- Docs aligned with the code: README.md and README-HARNESS.md document the
+  TypeScript entry point and the two-front-door model; the env reference
+  gains `GLMH_TURN_TIMEOUT_S` / `GLMH_MAX_SESSIONS` plus the bridge-only
+  table; the server-security section documents the bounded session cache
+  and turn deadline; the sdist includes `src/index.ts`.
+- Fixed a leftover unreachable `raise` in `HarnessConfig.validate` from the
+  timeout-validation rewrite.
+- Full suite: 246 passed, 2 skipped; 0 ruff errors; 0 pyright errors
+  (strict). `tests/test_hardening.py` adds 10 tests for the hardening set.
+

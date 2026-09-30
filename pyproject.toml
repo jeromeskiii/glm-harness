@@ -47,6 +47,7 @@ glm-harness = "glmharness.cli:entry"
 
 [project.urls]
 Repository = "https://huggingface.co/ohmskiii/GLM-5.3-Flash"
+Source = "https://github.com/jeromeskiii/glm-harness"
 
 [tool.hatch.version]
 path = "src/glmharness/__init__.py"
@@ -55,7 +56,7 @@ path = "src/glmharness/__init__.py"
 packages = ["src/glmharness"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/glmharness", "tests", "README-HARNESS.md", "LICENSE", "pyproject.toml"]
+include = ["src/glmharness", "src/index.ts", "tests", "README-HARNESS.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -102,5 +103,9 @@ typeCheckingMode = "strict"
 # ``torch`` and ``transformers`` ship in the optional ``[inference]`` extra;
 # CI installs only ``[dev]`` so pyright sees them as missing. Every call site
 # already carries ``# type: ignore[import-not-found, ...]`` so disabling the
-# import warning for these modules is safe.
+# import warning for these modules is safe. We additionally silence
+# ``reportUnknownVariableType`` because pyright treats symbols imported from
+# a missing/stubbed third-party module as ``Unknown`` even after the import
+# rule is relaxed.
 reportMissingImports = "none"
+reportUnknownVariableType = "none"

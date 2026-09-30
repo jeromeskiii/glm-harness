@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, TextIO, cast
 
@@ -23,6 +24,7 @@ from .config import HarnessConfig, generate_rpc_token, resolve_embed_model_path,
 from .context import Context, PluginLoader
 from .embeddings import EmbeddingProvider, EmbeddingsPlugin
 from .github import GITHUB_MUTATING_TOOLS, GitHubOptions, GitHubPlugin, GitHubProvider
+from .identity.brand import MODEL_VENDOR
 from .llm import MockLLM, OpenAICompatibleGLM, TransformersGLM
 from .logging import configure_logging, get_logger
 from .loop import AgentLoop
@@ -164,6 +166,29 @@ class ProtocolServer:
             self.github_mounted = True
         await loader.mount(plugins)
 
+    def _register_session(self, session_id: str, log: SessionLog) -> None:
+        """Insert a session, evicting the oldest non-default one when the
+        in-memory cache exceeds ``max_sessions``.
+
+        Server memory must stay bounded for months-long stdio hosting; only
+        the ``default`` session is persisted, so dynamic sessions are
+        RAM-only and safe to drop (with a warning) under pressure.
+        """
+        self.sessions[session_id] = log
+        max_sessions = max(1, int(self.config.max_sessions))
+        while len(self.sessions) > max_sessions:
+            evict = next(
+                (sid for sid in self.sessions if sid != "default" and sid != session_id),
+                None,
+            )
+            if evict is None:
+                break
+            del self.sessions[evict]
+            get_logger().warning(
+                "session evicted (max_sessions reached)",
+                extra={"sessionId": evict},
+            )
+
     @property
     def auto_token(self) -> str | None:
         """The per-process auto-generated bearer token, or ``None``.
@@ -192,12 +217,18 @@ class ProtocolServer:
         Rejects absolute paths and any path that escapes ``state_dir`` after
         resolution. Without this, an authenticated peer could ask the server
         to ingest ``/etc/passwd`` or any file the operator can read.
+
+        ``state_dir`` is typed as ``Path`` but dataclasses do not coerce at
+        assignment time, so a caller constructing ``HarnessConfig`` directly
+        with a string leaves a ``str`` here. We coerce defensively so an
+        authenticated peer cannot crash the server with ``AttributeError``
+        from an operator-side mis-configuration.
         """
         if self.config.state_dir is None:
             raise PermissionError(
                 "logPath imports require state_dir to be configured on the server"
             )
-        state_root = self.config.state_dir.resolve()
+        state_root = Path(self.config.state_dir).resolve()
         candidate = Path(raw)
         if candidate.is_absolute():
             raise PermissionError(
@@ -250,7 +281,7 @@ class ProtocolServer:
                     "runtimeInfo": {
                         "name": "glm-5.3-flash",
                         "version": __version__,
-                        "vendor": "zhipu",
+                        "vendor": MODEL_VENDOR,
                         "protocol": "glm-jsonrpc-stdio",
                     },
                     "runtimeCapabilities": capabilities,
@@ -273,7 +304,7 @@ class ProtocolServer:
             proj_new: object = params.get("projection")
             if isinstance(proj_new, list):
                 s_log.import_projection(cast(list[dict[str, Any]], proj_new))
-            self.sessions[new_id] = s_log
+            self._register_session(new_id, s_log)
             self._success(req_id, {"sessionId": new_id})
             return
 
@@ -282,7 +313,7 @@ class ProtocolServer:
             session_log = self.sessions.get(session_id)
             if session_log is None:
                 session_log = SessionLog()
-                self.sessions[session_id] = session_log
+                self._register_session(session_id, session_log)
             imported = 0
             proj_raw: object = params.get("projection")
             if isinstance(proj_raw, list):
@@ -352,7 +383,7 @@ class ProtocolServer:
             session_log = self.sessions.get(session_id)
             if session_log is None:
                 session_log = SessionLog()
-                self.sessions[session_id] = session_log
+                self._register_session(session_id, session_log)
 
             proj_raw: object = params.get("projection")
             if isinstance(proj_raw, list) and not session_log.events:
@@ -360,6 +391,12 @@ class ProtocolServer:
 
             assert self.ctx is not None
             assert self.tools is not None
+            # Scoped override: the tool pipeline, skills, and compaction all
+            # resolve the *current* session via the ``sessions`` service
+            # (tools.py, skills.py, compaction.py). Restore the previous value
+            # in ``finally`` so the slot never holds a stale session after the
+            # request completes.
+            prev_sessions = self.ctx.services.get("sessions")
             self.ctx.services["sessions"] = session_log
 
             agent = AgentLoop(
@@ -375,8 +412,28 @@ class ProtocolServer:
                 retry_jitter=self.config.retry_jitter,
             )
 
+            turn_ctx = (
+                asyncio.timeout(self.config.turn_timeout_s)
+                if self.config.turn_timeout_s > 0
+                else nullcontext()
+            )
             try:
-                answer = await agent.run(text)
+                try:
+                    async with turn_ctx:
+                        answer = await agent.run(text)
+                except TimeoutError:
+                    # Keep the session log coherent: cancellation closes the
+                    # turn with a durable failed marker (loop contract).
+                    session_log.append(
+                        "turn/end", {"status": "failed", "error": "TURN_TIMEOUT"}
+                    )
+                    self._error(
+                        req_id,
+                        -32008,
+                        f"Agent turn timed out after {self.config.turn_timeout_s}s",
+                        data={"sessionId": session_id},
+                    )
+                    return
                 self._success(
                     req_id,
                     {
@@ -393,6 +450,11 @@ class ProtocolServer:
                     f"Agent execution failed: {type(exc).__name__}: {exc}",
                     data={"sessionId": session_id},
                 )
+            finally:
+                if prev_sessions is None:
+                    self.ctx.services.pop("sessions", None)
+                else:
+                    self.ctx.services["sessions"] = prev_sessions
             return
 
         if method == "skills/list":
